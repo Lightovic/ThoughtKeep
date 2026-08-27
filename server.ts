@@ -1,0 +1,170 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import express from 'express';
+import path from 'path';
+import { createServer as createViteServer } from 'vite';
+import { requireAuth, type AuthenticatedRequest } from './server/auth.js';
+import { streamJournalChat, generateEntrySummary, type ChatTurn } from './server/gemini.js';
+import { logSecurityEvent } from './server/logger.js';
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  // Strict payload size limits (Directives 1 & 15)
+  app.use(express.json({ limit: '256kb' }));
+
+  // Security Headers Middleware (Directives 1 & M2)
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+
+    // Restrictive Content-Security-Policy (Task M2)
+    // Permitting only self, Firebase Auth / Firestore endpoints, and Google fonts/avatars
+    const cspDirectives = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' https://apis.google.com https://*.firebaseapp.com",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com data:",
+      "img-src 'self' data: https://lh3.googleusercontent.com https://*.googleusercontent.com",
+      "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com https://*.googleapis.com https://*.firebaseio.com",
+      "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ];
+    res.setHeader('Content-Security-Policy', cspDirectives.join('; '));
+
+    next();
+  });
+
+  // Operational health endpoint (Task C3: operational facts only, no security marketing claims)
+  app.get('/api/health', (req, res) => {
+    res.json({
+      status: 'ok',
+      service: 'thoughtkeep',
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  /**
+   * Protected Streaming Chat Endpoint
+   * - Requires verified Firebase ID token with email_verified = true
+   * - Enforces server-derived UID
+   * - Buffers and screens model responses before progressive emission (Task C1 & H2)
+   */
+  app.post('/api/chat/stream', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const user = req.user!;
+    const { history = [], message, aiProcessing = 'allowed' } = req.body || {};
+
+    if (!message || typeof message !== 'string' || message.trim() === '') {
+      res.status(400).json({ error: 'Please write a message to reflect on.' });
+      return;
+    }
+
+    if (!Array.isArray(history)) {
+      res.status(400).json({ error: 'Invalid history format.' });
+      return;
+    }
+
+    const processingPolicy: 'allowed' | 'never' = aiProcessing === 'never' ? 'never' : 'allowed';
+
+    // Set headers for SSE streaming
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    try {
+      const stream = streamJournalChat(user.uid, history as ChatTurn[], message.trim(), processingPolicy);
+      for await (const chunk of stream) {
+        res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
+      }
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (_err) {
+      logSecurityEvent({
+        action: 'CHAT_STREAM_ERROR',
+        resourceId: `user:${user.uid.substring(0, 6)}...`,
+        decision: 'DENY',
+        policy: 'FAIL_CLOSED',
+        severity: 'ERROR',
+        details: {
+          reason: 'CHAT_STREAM_FAILED',
+        },
+      });
+
+      // If headers were already sent, send a sanitized error event and end
+      if (res.headersSent) {
+        res.write(`data: ${JSON.stringify({ error: 'We were unable to process this reflection right now. Please try again.' })}\n\n`);
+        res.end();
+      } else {
+        res.status(500).json({
+          error: 'We were unable to process this reflection right now. Please try again.',
+        });
+      }
+    }
+  });
+
+  /**
+   * Protected Summarization Endpoint
+   * - Triggered ONLY when the user explicitly clicks "Save entry"
+   * - Generates concise title and summary from the journal session
+   * - Respects entry-level aiProcessing policy (Task C2)
+   */
+  app.post('/api/chat/summarize', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const user = req.user!;
+    const { messages = [], aiProcessing = 'allowed' } = req.body || {};
+
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ error: 'No messages provided for summarization.' });
+      return;
+    }
+
+    const processingPolicy: 'allowed' | 'never' = aiProcessing === 'never' ? 'never' : 'allowed';
+
+    try {
+      const summaryResult = await generateEntrySummary(user.uid, messages as ChatTurn[], processingPolicy);
+      res.json(summaryResult);
+    } catch (_err) {
+      logSecurityEvent({
+        action: 'SUMMARIZE_ERROR',
+        resourceId: `user:${user.uid.substring(0, 6)}...`,
+        decision: 'DENY',
+        policy: 'FAIL_CLOSED',
+        severity: 'ERROR',
+        details: {
+          reason: 'SUMMARIZATION_FAILED',
+        },
+      });
+      res.status(500).json({
+        error: 'Unable to generate summary. Your entry will still be preserved.',
+      });
+    }
+  });
+
+  // Vite development middleware or static production serving
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`ThoughtKeep server listening on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();

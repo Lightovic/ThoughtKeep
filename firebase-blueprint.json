@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "User": {
+      "path": "users/{userId}",
+      "description": "User profile and metadata",
+      "fields": {
+        "uid": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "lastActiveAt": { "type": "string" }
+      }
+    },
+    "JournalEntry": {
+      "path": "users/{userId}/entries/{entryId}",
+      "description": "Individual journal conversation entry and summary",
+      "fields": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "summary": { "type": "string" },
+        "messages": { "type": "array" },
+        "aiProcessing": { "type": "string", "enum": ["allowed", "never"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  }
+}

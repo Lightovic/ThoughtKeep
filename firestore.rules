@@ -1,0 +1,54 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper: Verify the caller is authenticated and matches the path owner
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    // Helper: Check if caller matches designated admin UID (never writable from client)
+    // Must be replaced with the project owner's real Firebase UID before the administrative
+    // view will function. Leaving it unreplaced fails safe by matching nobody.
+    function isAdmin() {
+      return request.auth != null && request.auth.uid == 'REPLACE_WITH_OWNER_UID';
+    }
+
+    // User profile document
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // Journal entries: owner has full access
+    match /users/{userId}/entries/{entryId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    // Usage counters: owner may read, only the backend writes
+    match /users/{userId}/usage/{docId} {
+      allow read: if isOwner(userId);
+      allow write: if false;
+    }
+
+    // Audit trail: owner may READ, never write.
+    // Deliberately NOT covered by any wildcard. Firestore grants access if
+    // ANY matching rule allows, so a broad users/{userId}/{document=**}
+    // rule would silently re-grant write here and make the audit log
+    // editable by its own subject.
+    match /users/{userId}/securityEvents/{eventId} {
+      allow read: if isOwner(userId);
+      allow write: if false;
+    }
+
+    // Administrative metrics and runtime config: read-only by designated admin UID, never client-writable
+    match /admin/{docId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Default deny for all other paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
