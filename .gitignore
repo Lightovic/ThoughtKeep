@@ -1,0 +1,22 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+service-account*.json
+credentials.json
+
+# Dependencies
+node_modules/
+__pycache__/
+venv/
+
+# Build output
+dist/
+build/
+.next/
+
+# Local noise
+.DS_Store
+*.log
