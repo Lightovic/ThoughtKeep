@@ -4,3 +4,26 @@
   --font-serif: "Newsreader", Georgia, Cambria, "Times New Roman", Times, serif;
   --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
+
+/* ================================================================
+   PHASE4_STICKY_UI_CSS
+   ThoughtKeep Phase 4 — persistent reflection controls
+   ================================================================ */
+
+[data-tk-sticky-controls="true"] {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 1000 !important;
+  background: rgba(255, 255, 255, 0.96) !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.08),
+              0 8px 24px rgba(15, 23, 42, 0.06) !important;
+}
+
+/* Keep the sticky controls comfortable on small screens. */
+@media (max-width: 640px) {
+  [data-tk-sticky-controls="true"] {
+    top: 0 !important;
+  }
+}

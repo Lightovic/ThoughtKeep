@@ -14,6 +14,7 @@ import {
   Search,
   ArrowLeft,
   Clock,
+  RotateCcw,
 } from 'lucide-react';
 import type { JournalEntry } from '../types.ts';
 import { deleteJournalEntry } from '../firebase.ts';
@@ -26,6 +27,7 @@ interface HistoryViewProps {
   isLoading: boolean;
   onEntryDeleted: (entryId: string) => void;
   onStartNewJournal: () => void;
+  onResumeEntry: (entry: JournalEntry) => void;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
@@ -34,6 +36,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   isLoading,
   onEntryDeleted,
   onStartNewJournal,
+  onResumeEntry,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEntry, setSelectedEntry] = useState<JournalEntry | null>(null);
@@ -104,15 +107,38 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               <span>Back to all entries</span>
             </button>
 
-            <button
-              id="delete-selected-entry-btn"
-              type="button"
-              onClick={() => setEntryToDelete(selectedEntry)}
-              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 hover:text-rose-700 focus:outline-hidden focus:ring-2 focus:ring-rose-300"
-            >
-              <Trash2 className="h-4 w-4" />
-              <span>Delete entry</span>
-            </button>
+            <div className="flex items-center gap-2">
+              {selectedEntry.aiProcessing === 'never' ? (
+                <span
+                  id="private-entry-read-only"
+                  className="inline-flex items-center rounded-full bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-500"
+                  title="This entry was explicitly excluded from AI processing"
+                >
+                  Read-only · AI excluded
+                </span>
+              ) : (
+                <button
+                  id="resume-selected-entry-btn"
+                  type="button"
+                  onClick={() => onResumeEntry(selectedEntry)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-950 focus:outline-hidden focus:ring-2 focus:ring-slate-300"
+                  title="Resume this saved conversation"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>Resume conversation</span>
+                </button>
+              )}
+
+              <button
+                id="delete-selected-entry-btn"
+                type="button"
+                onClick={() => setEntryToDelete(selectedEntry)}
+                className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 hover:text-rose-700 focus:outline-hidden focus:ring-2 focus:ring-rose-300"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span>Delete entry</span>
+              </button>
+            </div>
           </div>
 
           {/* Entry Title & Metadata */}

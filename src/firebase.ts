@@ -159,10 +159,12 @@ export async function fetchUserEntries(userId: string): Promise<JournalEntry[]> 
 export async function saveJournalEntry(
   userId: string,
   entryData: {
+    id?: string;
     title: string;
     summary: string;
     messages: JournalEntry['messages'];
     aiProcessing?: 'allowed' | 'never';
+    createdAt?: string;
   }
 ): Promise<string> {
   const currentAuthUid = auth.currentUser?.uid;
@@ -177,7 +179,10 @@ export async function saveJournalEntry(
     throw err;
   }
 
-  const entryId = `entry_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const entryId =
+    typeof entryData.id === 'string' && entryData.id.trim().length > 0
+      ? entryData.id.trim()
+      : `entry_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const nowUtc = new Date().toISOString();
 
   const cleanMessages = (entryData.messages || []).map((m) => ({
@@ -195,7 +200,7 @@ export async function saveJournalEntry(
     summary: (entryData.summary || '').trim(),
     messages: cleanMessages,
     aiProcessing: entryData.aiProcessing === 'never' ? 'never' : 'allowed',
-    createdAt: nowUtc,
+    createdAt: entryData.createdAt || nowUtc,
     updatedAt: nowUtc,
   };
 
@@ -215,10 +220,12 @@ export async function saveJournalEntry(
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
+            id: fullEntry.id,
             title: fullEntry.title,
             summary: fullEntry.summary,
             messages: fullEntry.messages,
             aiProcessing: fullEntry.aiProcessing,
+            createdAt: fullEntry.createdAt,
           }),
         });
 
@@ -232,6 +239,59 @@ export async function saveJournalEntry(
     }
     throw clientErr;
   }
+}
+
+export async function updateJournalEntry(
+  userId: string,
+  entryId: string,
+  entryData: {
+    title?: string;
+    summary?: string;
+    messages: JournalEntry['messages'];
+    aiProcessing?: 'allowed' | 'never';
+  }
+): Promise<void> {
+  const currentAuthUid = auth.currentUser?.uid;
+
+  if (!currentAuthUid) {
+    const err: any = new Error('auth_missing');
+    err.code = 'auth-missing';
+    throw err;
+  }
+
+  if (userId !== currentAuthUid) {
+    const err: any = new Error('auth_mismatch');
+    err.code = 'auth-mismatch';
+    throw err;
+  }
+
+  const nowUtc = new Date().toISOString();
+
+  const cleanMessages = (entryData.messages || []).map((m) => ({
+    id: m.id || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    role: m.role === 'model' ? ('model' as const) : ('user' as const),
+    content: typeof m.content === 'string' ? m.content : '',
+    timestamp: m.timestamp || nowUtc,
+    aiProcessing: m.aiProcessing === 'never' ? ('never' as const) : ('allowed' as const),
+  }));
+
+  const docRef = doc(db, 'users', currentAuthUid, 'entries', entryId);
+
+  const updates: Record<string, unknown> = {
+    messages: cleanMessages,
+    updatedAt: nowUtc,
+    aiProcessing: entryData.aiProcessing === 'never' ? 'never' : 'allowed',
+  };
+
+  if (typeof entryData.title === 'string' && entryData.title.trim()) {
+    updates.title = entryData.title.trim();
+  }
+
+  if (typeof entryData.summary === 'string') {
+    updates.summary = entryData.summary.trim();
+  }
+
+  await setDoc(docRef, updates, { merge: true });
 }
 
 export async function deleteJournalEntry(userId: string, entryId: string): Promise<void> {

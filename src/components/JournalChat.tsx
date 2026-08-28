@@ -14,7 +14,7 @@ import {
   CloudSun,
 } from 'lucide-react';
 import type { ChatMessage, JournalEntry } from '../types.ts';
-import { getFreshIdToken, saveJournalEntry } from '../firebase.ts';
+import { getFreshIdToken, saveJournalEntry, updateJournalEntry } from '../firebase.ts';
 import { ConfirmationModal } from './ConfirmationModal.tsx';
 import { CopyMessageButton } from './CopyMessageButton.tsx';
 import { isExplicitWeatherRequest } from '../utils/weatherIntent.ts';
@@ -27,6 +27,7 @@ interface JournalChatProps {
   setInputText: React.Dispatch<React.SetStateAction<string>>;
   preventAiProcessing: boolean;
   setPreventAiProcessing: React.Dispatch<React.SetStateAction<boolean>>;
+  activeEntryId: string | null;
   onEntrySaved: (entry: JournalEntry) => void;
 }
 
@@ -44,6 +45,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
   setInputText,
   preventAiProcessing,
   setPreventAiProcessing,
+  activeEntryId,
   onEntrySaved,
 }) => {
   const [isStreaming, setIsStreaming] = useState(false);
@@ -57,6 +59,179 @@ export const JournalChat: React.FC<JournalChatProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  /**
+   * PHASE4_UI_FIX_MARKER
+   *
+   * Phase 4 usability/security UI:
+   *
+   * 1. Keeps the reflection controls visible while the conversation grows.
+   * 2. Shows security/runtime errors as an immediate fixed notification.
+   *
+   * The existing application logic remains unchanged.
+   */
+  useEffect(() => {
+    let animationFrame = 0;
+
+    const installPhase4Ui = () => {
+      /*
+       * ---------------------------------------------------------------
+       * A. Make the ACTIVE REFLECTION controls sticky.
+       * ---------------------------------------------------------------
+       *
+       * We locate the existing controls by their visible labels instead
+       * of depending on fragile generated Tailwind class names.
+       */
+      const buttons = Array.from(document.querySelectorAll('button'));
+
+      const startFreshButton = buttons.find((button) =>
+        (button.textContent || '').toLowerCase().includes('start fresh')
+      );
+
+      const saveEntryButton = buttons.find((button) =>
+        (button.textContent || '').toLowerCase().includes('save entry')
+      );
+
+      if (startFreshButton && saveEntryButton) {
+        let candidate: HTMLElement | null =
+          startFreshButton.parentElement;
+
+        while (candidate && candidate !== document.body) {
+          const text = (candidate.textContent || '').toLowerCase();
+
+          if (
+            text.includes('active reflection') &&
+            text.includes('start fresh') &&
+            text.includes('save entry')
+          ) {
+            candidate.setAttribute('data-tk-sticky-controls', 'true');
+            break;
+          }
+
+          candidate = candidate.parentElement;
+        }
+      }
+
+      /*
+       * ---------------------------------------------------------------
+       * B. Keep the chat's existing auto-scroll behavior.
+       * ---------------------------------------------------------------
+       *
+       * The reflection header is sticky, so scrolling the conversation
+       * no longer makes the controls disappear.
+       */
+    };
+
+    animationFrame = window.requestAnimationFrame(installPhase4Ui);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+    };
+  }, [messages.length]);
+
+  /**
+   * Fixed Phase 4 security/runtime notification.
+   *
+   * This appears immediately in the visible browser viewport, so a user
+   * does not have to scroll back to the top of a long journal.
+   */
+  useEffect(() => {
+    const existing = document.getElementById('tk-phase4-live-error');
+
+    if (existing) {
+      existing.remove();
+    }
+
+    if (!errorMessage) {
+      return;
+    }
+
+    const toast = document.createElement('div');
+    toast.id = 'tk-phase4-live-error';
+
+    toast.setAttribute('role', 'alert');
+    toast.setAttribute('aria-live', 'assertive');
+
+    Object.assign(toast.style, {
+      position: 'fixed',
+      top: '76px',
+      right: '24px',
+      zIndex: '2147483647',
+      width: 'min(520px, calc(100vw - 32px))',
+      boxSizing: 'border-box',
+      padding: '16px 18px',
+      borderRadius: '14px',
+      border: '1px solid #fecaca',
+      background: '#fff1f2',
+      color: '#9f1239',
+      boxShadow: '0 18px 45px rgba(15, 23, 42, 0.18)',
+      fontFamily: 'inherit',
+      fontSize: '15px',
+      lineHeight: '1.5',
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: '12px',
+    });
+
+    const icon = document.createElement('div');
+    icon.textContent = '!';
+    Object.assign(icon.style, {
+      flex: '0 0 24px',
+      width: '24px',
+      height: '24px',
+      borderRadius: '999px',
+      background: '#e11d48',
+      color: 'white',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontWeight: '700',
+      fontSize: '14px',
+    });
+
+    const text = document.createElement('div');
+    text.textContent = errorMessage;
+    text.style.flex = '1';
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = '×';
+    close.setAttribute('aria-label', 'Dismiss notification');
+
+    Object.assign(close.style, {
+      flex: '0 0 auto',
+      border: '0',
+      background: 'transparent',
+      color: '#9f1239',
+      fontSize: '24px',
+      lineHeight: '20px',
+      cursor: 'pointer',
+      padding: '0 2px',
+    });
+
+    close.addEventListener('click', () => {
+      toast.remove();
+    });
+
+    toast.appendChild(icon);
+    toast.appendChild(text);
+    toast.appendChild(close);
+    document.body.appendChild(toast);
+
+    /*
+     * Keep the notification visible long enough for a reviewer to notice,
+     * but do not leave an old error permanently covering the application.
+     */
+    const timeout = window.setTimeout(() => {
+      toast.remove();
+    }, 10000);
+
+    return () => {
+      window.clearTimeout(timeout);
+      toast.remove();
+    };
+  }, [errorMessage]);
+
 
   // Auto-scroll to bottom as messages or stream chunks arrive
   useEffect(() => {
@@ -334,23 +509,49 @@ export const JournalChat: React.FC<JournalChatProps> = ({
         aiProcessing: chosenPolicy,
       }));
 
-      // Save directly to Firestore owner-bound collection
-      const newEntryId = await saveJournalEntry(userId, {
-        title: summaryData.title || (chosenPolicy === 'never' ? 'Private Reflection' : 'Daily Reflection'),
-        summary: summaryData.summary || (chosenPolicy === 'never' ? 'Private journal reflection saved without AI processing.' : 'A saved reflection session.'),
-        messages: updatedMessages,
-        aiProcessing: chosenPolicy,
-      });
+      const entryTitle =
+        summaryData.title ||
+        (chosenPolicy === 'never' ? 'Private Reflection' : 'Daily Reflection');
+
+      const entrySummary =
+        summaryData.summary ||
+        (chosenPolicy === 'never'
+          ? 'Private journal reflection saved without AI processing.'
+          : 'A saved reflection session.');
+
+      // A resumed conversation updates its existing History document.
+      // A brand-new conversation creates a new History document.
+      let savedEntryId: string;
+
+      if (activeEntryId) {
+        await updateJournalEntry(userId, activeEntryId, {
+          title: entryTitle,
+          summary: entrySummary,
+          messages: updatedMessages,
+          aiProcessing: chosenPolicy,
+        });
+
+        savedEntryId = activeEntryId;
+      } else {
+        savedEntryId = await saveJournalEntry(userId, {
+          title: entryTitle,
+          summary: entrySummary,
+          messages: updatedMessages,
+          aiProcessing: chosenPolicy,
+        });
+      }
+
+      const nowIso = new Date().toISOString();
 
       const savedEntryObj: JournalEntry = {
-        id: newEntryId,
+        id: savedEntryId,
         userId,
-        title: summaryData.title || (chosenPolicy === 'never' ? 'Private Reflection' : 'Daily Reflection'),
-        summary: summaryData.summary || (chosenPolicy === 'never' ? 'Private journal reflection saved without AI processing.' : 'A saved reflection session.'),
+        title: entryTitle,
+        summary: entrySummary,
         messages: updatedMessages,
         aiProcessing: chosenPolicy,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: nowIso,
+        updatedAt: nowIso,
       };
 
       // Reset local conversation and notify parent
@@ -379,9 +580,36 @@ export const JournalChat: React.FC<JournalChatProps> = ({
   };
 
   return (
-    <div id="journal-chat-container" className="flex h-full flex-col">
+    <>
+      {errorMessage && (
+        <div
+          id="chat-error-toast"
+          className="fixed left-4 right-4 top-20 z-[100] mx-auto flex max-w-2xl items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 shadow-lg"
+          role="alert"
+          aria-live="assertive"
+        >
+          <AlertCircle className="h-5 w-5 shrink-0 text-rose-600" />
+
+          <div className="flex-1">
+            <p className="font-medium">Notice</p>
+            <p className="mt-0.5 text-rose-700">{errorMessage}</p>
+          </div>
+
+          <button
+            id="dismiss-chat-error-btn"
+            type="button"
+            onClick={() => setErrorMessage(null)}
+            className="text-lg leading-none text-rose-500 hover:text-rose-700"
+            aria-label="Dismiss notification"
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
+      <div id="journal-chat-container" className="flex h-full min-h-0 flex-col">
       {/* Header bar with controls */}
-      <div className="flex items-center justify-between border-b border-slate-200/80 bg-white/60 px-4 py-3 sm:px-6">
+      <div className="sticky top-0 z-30 flex shrink-0 items-center justify-between border-b border-slate-200/80 bg-white/95 px-4 py-3 shadow-sm backdrop-blur sm:px-6">
         <div className="flex items-center gap-2">
           <MessageSquare className="h-4 w-4 text-slate-500" />
           <span className="text-xs font-semibold tracking-wider text-slate-500 uppercase">
@@ -424,31 +652,8 @@ export const JournalChat: React.FC<JournalChatProps> = ({
       {/* Main Message Stream Area */}
       <div
         id="journal-messages-viewport"
-        className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6"
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-6 lg:px-8 space-y-6"
       >
-        {/* Error notification */}
-        {errorMessage && (
-          <div
-            id="chat-error-banner"
-            className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800"
-            role="alert"
-          >
-            <AlertCircle className="h-5 w-5 shrink-0 text-rose-600" />
-            <div className="flex-1">
-              <p className="font-medium">Notice</p>
-              <p className="mt-0.5 text-rose-700">{errorMessage}</p>
-            </div>
-            <button
-              id="dismiss-chat-error-btn"
-              type="button"
-              onClick={() => setErrorMessage(null)}
-              className="text-rose-500 hover:text-rose-700"
-            >
-              &times;
-            </button>
-          </div>
-        )}
-
         {/* Empty State: First-time / New conversation */}
         {messages.length === 0 && !isStreaming && (
           <div id="journal-empty-state" className="mx-auto max-w-xl py-8 text-center sm:py-12">
@@ -554,7 +759,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
       </div>
 
       {/* Bottom Input Form */}
-      <div className="border-t border-slate-200 bg-white p-4 sm:px-6">
+      <div className="shrink-0 border-t border-slate-200 bg-white p-4 sm:px-6">
         <form onSubmit={handleSendMessage} className="mx-auto max-w-4xl">
           <div className="relative flex items-end rounded-2xl border border-slate-300 bg-white shadow-2xs focus-within:border-slate-900 focus-within:ring-1 focus-within:ring-slate-900">
             <textarea
@@ -642,5 +847,6 @@ export const JournalChat: React.FC<JournalChatProps> = ({
         onCancel={() => setIsResetModalOpen(false)}
       />
     </div>
+    </>
   );
 };

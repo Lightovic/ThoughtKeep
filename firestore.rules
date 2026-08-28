@@ -11,7 +11,7 @@ service cloud.firestore {
     // Must be replaced with the project owner's real Firebase UID before the administrative
     // view will function. Leaving it unreplaced fails safe by matching nobody.
     function isAdmin() {
-      return request.auth != null && request.auth.uid == 'REPLACE_WITH_OWNER_UID';
+      return request.auth != null && request.auth.uid == 'srAUriVhkje8Nwh291dmHS10w2V2';
     }
 
     // User profile document

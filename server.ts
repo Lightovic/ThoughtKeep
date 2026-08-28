@@ -8,12 +8,14 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { requireAuth, getAdminFirestore, type AuthenticatedRequest } from './server/auth.js';
 import { streamJournalChat, generateEntrySummary, type ChatTurn } from './server/gemini.js';
+import { GateBlockedError } from './server/screening.js';
 import { fetchCurrentWeather, validateCoordinates, type WeatherData } from './server/weather.js';
 import { logSecurityEvent } from './server/logger.js';
+import { recordLedgerEvent, readLedger } from './server/ledger.js';
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // Strict payload size limits (Directives 1 & 15)
   app.use(express.json({ limit: '256kb' }));
@@ -142,15 +144,38 @@ async function startServer() {
       for await (const chunk of stream) {
         res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
       }
+      // THE LEDGER: the reflection passed both gates.
+      void recordLedgerEvent(user.uid, {
+        action: 'RESPONSE_SCREENED',
+        decision: 'ALLOWED',
+        category: 'reflection',
+        severity: 'LOW',
+      });
       res.write('data: [DONE]\n\n');
       res.end();
     } catch (err: any) {
       const isConfigError = err?.code === 'CONFIG_MISSING_API_KEY' || err?.name === 'ConfigurationError';
-      const userErrorMessage = isConfigError
-        ? 'The reflection assistant is currently unavailable due to a service configuration issue. Please check back later.'
-        : (err?.message && typeof err.message === 'string' && !err.message.includes('API_KEY')
-            ? err.message
-            : 'We were unable to process this reflection right now. Please try again.');
+      const isGateBlock = err instanceof GateBlockedError;
+
+      // THE GATE: tell the user the general category, that nothing was sent
+      // or stored, and what to do next. Never reveal which rule matched
+      // (directive 9) and never echo an internal error message.
+      let userErrorMessage: string;
+      if (isGateBlock) {
+        const cat = (err as GateBlockedError).category;
+        userErrorMessage =
+          cat === 'unscreened content'
+            ? 'ThoughtKeep could not complete its safety check just now, so this message was not sent to the AI and nothing was saved. Please try again in a moment.'
+            : (err as GateBlockedError).direction === 'inbound'
+              ? `This message was flagged as possible ${cat}, so it was not sent to the AI and nothing was stored. You can rephrase it and try again.`
+              : `The reply was withheld because it was flagged as possible ${cat}. Nothing was shown or saved. You can rephrase your message and try again.`;
+      } else if (isConfigError) {
+        userErrorMessage =
+          'The reflection assistant is currently unavailable due to a service configuration issue. Please check back later.';
+      } else {
+        // Directive 16: never surface a raw internal error to the user.
+        userErrorMessage = 'We were unable to process this reflection right now. Please try again.';
+      }
 
       logSecurityEvent({
         action: 'CHAT_STREAM_ERROR',
@@ -158,10 +183,21 @@ async function startServer() {
         decision: 'DENY',
         policy: 'FAIL_CLOSED',
         severity: 'ERROR',
-        details: {
-          reason: isConfigError ? 'MISSING_API_KEY' : 'CHAT_STREAM_FAILED',
-        },
+        details: isGateBlock
+          ? { reason: 'GATE_BLOCKED', category: (err as GateBlockedError).category }
+          : { reason: isConfigError ? 'MISSING_API_KEY' : 'CHAT_STREAM_FAILED' },
       });
+
+      // THE LEDGER: record the block. Category only, never content.
+      if (isGateBlock) {
+        const gerr = err as GateBlockedError;
+        void recordLedgerEvent(user.uid, {
+          action: gerr.category === 'sensitive data' ? 'SENSITIVE_DATA_DETECTED' : 'CONTENT_BLOCKED',
+          decision: 'BLOCKED',
+          category: gerr.category,
+          severity: gerr.category === 'unscreened content' ? 'MEDIUM' : 'HIGH',
+        });
+      }
 
       // If headers were already sent, send a sanitized error event and end
       if (res.headersSent) {
@@ -312,6 +348,21 @@ async function startServer() {
       res.json({ success: true });
     } catch (_err) {
       res.status(500).json({ error: 'Failed to delete entry.' });
+    }
+  });
+
+  /**
+   * THE LEDGER — this user's own security audit trail.
+   * The uid comes from the verified token only; there is no way to ask for
+   * another user's events because there is no parameter to ask with.
+   */
+  app.get('/api/security/events', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const user = req.user!;
+    try {
+      const events = await readLedger(user.uid, 100);
+      res.json({ events });
+    } catch {
+      res.status(500).json({ error: 'Unable to load your security events right now.' });
     }
   });
 

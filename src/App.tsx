@@ -34,6 +34,10 @@ export default function App() {
   const [chatInputText, setChatInputText] = useState<string>('');
   const [preventAiProcessing, setPreventAiProcessing] = useState<boolean>(false);
 
+  // Tracks the saved History entry currently being continued.
+  // null means this is a brand-new conversation.
+  const [activeEntryId, setActiveEntryId] = useState<string | null>(null);
+
   // Entries State
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [isEntriesLoading, setIsEntriesLoading] = useState(false);
@@ -120,12 +124,40 @@ export default function App() {
   };
 
   const handleEntrySaved = (newEntry: JournalEntry) => {
-    setEntries((prev) => [newEntry, ...prev]);
+    setEntries((prev) => {
+      const existingIndex = prev.findIndex((entry) => entry.id === newEntry.id);
+
+      // Resumed conversation: replace the existing History entry.
+      if (existingIndex !== -1) {
+        return prev.map((entry) =>
+          entry.id === newEntry.id ? newEntry : entry
+        );
+      }
+
+      // Brand-new conversation: add it to the top of History.
+      return [newEntry, ...prev];
+    });
+
+    // Saving finishes the current live session.
+    setActiveEntryId(null);
     setActiveView('history');
   };
 
   const handleEntryDeleted = (deletedEntryId: string) => {
     setEntries((prev) => prev.filter((e) => e.id !== deletedEntryId));
+  };
+
+  const handleResumeEntry = (entry: JournalEntry) => {
+    // Only AI-allowed saved conversations can be resumed into the live AI chat.
+    if (entry.aiProcessing === 'never') {
+      return;
+    }
+
+    setChatMessages(entry.messages);
+    setChatInputText('');
+    setPreventAiProcessing(false);
+    setActiveEntryId(entry.id);
+    setActiveView('journal');
   };
 
   // Initial Auth Loading Screen
@@ -167,8 +199,8 @@ export default function App() {
             onClearError={() => setSignInError(null)}
           />
         ) : (
-          <main id="authenticated-workspace" className="flex-1 flex flex-col max-w-5xl w-full mx-auto">
-            <div className={`flex-1 flex flex-col ${activeView === 'journal' ? 'flex' : 'hidden'}`}>
+          <main id="authenticated-workspace" className="flex-1 min-h-0 flex flex-col max-w-5xl w-full mx-auto">
+            <div className={`min-h-0 flex-1 flex flex-col ${activeView === 'journal' ? 'flex' : 'hidden'}`}>
               <JournalChat
                 userId={currentUser.uid}
                 messages={chatMessages}
@@ -177,6 +209,7 @@ export default function App() {
                 setInputText={setChatInputText}
                 preventAiProcessing={preventAiProcessing}
                 setPreventAiProcessing={setPreventAiProcessing}
+                activeEntryId={activeEntryId}
                 onEntrySaved={handleEntrySaved}
               />
             </div>
@@ -188,6 +221,7 @@ export default function App() {
                   isLoading={isEntriesLoading}
                   onEntryDeleted={handleEntryDeleted}
                   onStartNewJournal={() => setActiveView('journal')}
+                  onResumeEntry={handleResumeEntry}
                 />
               </div>
             )}
