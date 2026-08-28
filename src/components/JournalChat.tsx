@@ -4,25 +4,48 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, BookmarkCheck, RotateCcw, Sparkles, AlertCircle, MessageSquare } from 'lucide-react';
+import {
+  Send,
+  BookmarkCheck,
+  RotateCcw,
+  Sparkles,
+  AlertCircle,
+  MessageSquare,
+  CloudSun,
+} from 'lucide-react';
 import type { ChatMessage, JournalEntry } from '../types.ts';
 import { getFreshIdToken, saveJournalEntry } from '../firebase.ts';
 import { ConfirmationModal } from './ConfirmationModal.tsx';
+import { CopyMessageButton } from './CopyMessageButton.tsx';
+import { isExplicitWeatherRequest } from '../utils/weatherIntent.ts';
 
 interface JournalChatProps {
   userId: string;
+  messages: ChatMessage[];
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  inputText: string;
+  setInputText: React.Dispatch<React.SetStateAction<string>>;
+  preventAiProcessing: boolean;
+  setPreventAiProcessing: React.Dispatch<React.SetStateAction<boolean>>;
   onEntrySaved: (entry: JournalEntry) => void;
 }
 
 const STARTER_PROMPTS = [
-  'What made you feel proud or accomplished today?',
-  'Describe a problem you have been turning over in your mind.',
-  'What is one small thing that brought you peace today?',
+  'What was the most meaningful moment of your day?',
+  "What's been occupying your mind lately?",
+  'What went well today, and what would you like to carry forward?',
 ];
 
-export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }) => {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [inputText, setInputText] = useState('');
+export const JournalChat: React.FC<JournalChatProps> = ({
+  userId,
+  messages,
+  setMessages,
+  inputText,
+  setInputText,
+  preventAiProcessing,
+  setPreventAiProcessing,
+  onEntrySaved,
+}) => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentStreamText, setCurrentStreamText] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -31,7 +54,6 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
-  const [preventAiProcessing, setPreventAiProcessing] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -57,11 +79,10 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
     }
   };
 
-  const handleSendMessage = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const textToSend = inputText.trim();
-    if (!textToSend || isStreaming) return;
-
+  /**
+   * Executes the chat streaming turn
+   */
+  const executeChatTurn = async (textToSend: string) => {
     setErrorMessage(null);
     const userMessageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const newTurn: ChatMessage = {
@@ -82,22 +103,55 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
     setIsStreaming(true);
     setCurrentStreamText('');
 
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, 25000); // 25-second client-side timeout
+
     try {
-      // Get fresh verified token (Directive 2)
+      // Get fresh verified token
       const token = await getFreshIdToken();
       if (!token) {
-        throw new Error('Authentication session is no longer active. Please sign in again.');
+        throw new Error('Your session has expired or is invalid. Please sign in again.');
+      }
+
+      // Check if this is an explicit weather question and request location consent on demand
+      let coords: { latitude: number; longitude: number } | null = null;
+      if (isExplicitWeatherRequest(textToSend)) {
+        if (typeof navigator !== 'undefined' && 'geolocation' in navigator) {
+          try {
+            const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+              navigator.geolocation.getCurrentPosition(resolve, reject, {
+                timeout: 7000,
+                maximumAge: 60000,
+                enableHighAccuracy: false,
+              });
+            });
+            if (pos && pos.coords) {
+              coords = {
+                latitude: pos.coords.latitude,
+                longitude: pos.coords.longitude,
+              };
+            }
+          } catch (_geoErr) {
+            // Geolocation was denied or unavailable; proceed gracefully
+          }
+        }
       }
 
       // Convert messages to history payload
-      const historyPayload = messages.map(m => ({
+      const historyPayload = messages.map((m) => ({
         role: m.role,
         content: m.content,
         aiProcessing: m.aiProcessing || 'allowed',
       }));
 
+      const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const clientLocale = navigator.language || 'en-US';
+
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
+        signal: abortController.signal,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
@@ -105,25 +159,34 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
         body: JSON.stringify({
           history: historyPayload,
           message: textToSend,
+          timezone: clientTimezone,
+          locale: clientLocale,
+          latitude: coords?.latitude,
+          longitude: coords?.longitude,
         }),
       });
 
       if (!response.ok) {
-        let errData;
+        let errData: any = null;
         try {
           errData = await response.json();
         } catch {
-          errData = { error: 'Failed to contact AI reflection service.' };
+          // JSON parsing failed
         }
-        throw new Error(errData.error || 'Server rejected the reflection request.');
+        const errorMsg =
+          errData?.error && typeof errData.error === 'string'
+            ? errData.error
+            : 'We were unable to connect to the reflection assistant right now. Please try again.';
+        throw new Error(errorMsg);
       }
 
       const reader = response.body?.getReader();
-      if (!reader) throw new Error('Response stream unavailable.');
+      if (!reader) throw new Error('Response stream is unavailable. Please try again.');
 
       const decoder = new TextDecoder();
       let accumulatedText = '';
       let buffer = '';
+      let serverReportedError: string | null = null;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -139,41 +202,71 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
           const dataStr = trimmed.slice(6);
           if (dataStr === '[DONE]') continue;
 
+          let parsed: any = null;
           try {
-            const parsed = JSON.parse(dataStr);
-            if (parsed.error) {
-              throw new Error(parsed.error);
+            parsed = JSON.parse(dataStr);
+          } catch {
+            continue;
+          }
+
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.error && typeof parsed.error === 'string') {
+              serverReportedError = parsed.error;
+              break;
             }
-            if (parsed.text) {
+            if (parsed.text && typeof parsed.text === 'string') {
               accumulatedText += parsed.text;
               setCurrentStreamText(accumulatedText);
             }
-          } catch (pErr: any) {
-            if (pErr.message && pErr.message !== 'Unexpected token') {
-              console.warn('Stream parse error:', pErr);
-            }
           }
+        }
+
+        if (serverReportedError) {
+          break;
         }
       }
 
-      if (accumulatedText.trim()) {
-        const modelMessage: ChatMessage = {
-          id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          role: 'model',
-          content: accumulatedText.trim(),
-          timestamp: new Date().toISOString(),
-          aiProcessing: 'allowed',
-        };
-        setMessages((prev) => [...prev, modelMessage]);
+      if (serverReportedError) {
+        throw new Error(serverReportedError);
       }
+
+      if (!accumulatedText.trim()) {
+        throw new Error('The reflection assistant did not produce a response. Please try sending your thought again.');
+      }
+
+      const modelMessage: ChatMessage = {
+        id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        role: 'model',
+        content: accumulatedText.trim(),
+        timestamp: new Date().toISOString(),
+        aiProcessing: 'allowed',
+      };
+      setMessages((prev) => [...prev, modelMessage]);
     } catch (err: any) {
-      setErrorMessage(
-        err.message || 'We could not complete this reflection turn. Please try again in a moment.'
-      );
+      let friendlyError = 'We could not complete this reflection turn. Please try again in a moment.';
+      if (err.name === 'AbortError') {
+        friendlyError = 'The request took too long to respond. Please check your connection and try again.';
+      } else if (err.message && typeof err.message === 'string') {
+        friendlyError = err.message;
+      }
+      setErrorMessage(friendlyError);
     } finally {
+      clearTimeout(timeoutId);
       setIsStreaming(false);
       setCurrentStreamText('');
     }
+  };
+
+  /**
+   * Main entry point when user triggers a message send
+   */
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const textToSend = inputText.trim();
+    if (!textToSend || isStreaming) return;
+
+    setErrorMessage(null);
+    await executeChatTurn(textToSend);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -185,10 +278,6 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
 
   /**
    * Consequential Action: Explicit Save Entry Flow
-   * Directives 8, 2, 3, 14 (Task H3):
-   * 1. Confirms action with human preview and privacy control.
-   * 2. Server summarizes via Gemini only if aiProcessing is 'allowed'.
-   * 3. Stores in Firestore under users/{uid}/entries/{entryId} with chosen aiProcessing value.
    */
   const handleConfirmSave = async () => {
     if (messages.length === 0 || isSaving) return;
@@ -199,42 +288,53 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
 
     try {
       const token = await getFreshIdToken();
-      if (!token) throw new Error('Your session expired. Please sign in again.');
+      if (!token) {
+        throw new Error('Your session has expired or is invalid. Please sign in again.');
+      }
 
       let summaryData = {
         title: chosenPolicy === 'never' ? 'Private Reflection' : 'Daily Reflection',
         summary: chosenPolicy === 'never' ? 'Private journal reflection saved without AI processing.' : '',
       };
 
-      // 1. Request server-side summarization ONLY if allowed
-      if (chosenPolicy === 'allowed') {
-        const summarizeRes = await fetch('/api/chat/summarize', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            messages: messages.map(m => ({
-              role: m.role,
-              content: m.content,
-              aiProcessing: 'allowed',
-            })),
-            aiProcessing: 'allowed',
-          }),
-        });
+      const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const clientLocale = navigator.language || 'en-US';
 
-        if (summarizeRes.ok) {
-          summaryData = await summarizeRes.json();
+      // Request server-side summarization ONLY if allowed
+      if (chosenPolicy === 'allowed') {
+        try {
+          const summarizeRes = await fetch('/api/chat/summarize', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              messages: messages.map((m) => ({
+                role: m.role,
+                content: m.content,
+                aiProcessing: 'allowed',
+              })),
+              aiProcessing: 'allowed',
+              timezone: clientTimezone,
+              locale: clientLocale,
+            }),
+          });
+
+          if (summarizeRes.ok) {
+            summaryData = await summarizeRes.json();
+          }
+        } catch {
+          // Fallback to default summary data if summarization request fails
         }
       }
 
-      const updatedMessages: ChatMessage[] = messages.map(m => ({
+      const updatedMessages: ChatMessage[] = messages.map((m) => ({
         ...m,
         aiProcessing: chosenPolicy,
       }));
 
-      // 2. Save directly to Firestore owner-bound collection
+      // Save directly to Firestore owner-bound collection
       const newEntryId = await saveJournalEntry(userId, {
         title: summaryData.title || (chosenPolicy === 'never' ? 'Private Reflection' : 'Daily Reflection'),
         summary: summaryData.summary || (chosenPolicy === 'never' ? 'Private journal reflection saved without AI processing.' : 'A saved reflection session.'),
@@ -255,13 +355,15 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
 
       // Reset local conversation and notify parent
       setMessages([]);
+      setInputText('');
       setIsSaveModalOpen(false);
       setPreventAiProcessing(false);
       onEntrySaved(savedEntryObj);
-    } catch (err: any) {
+    } catch (_err: any) {
       setErrorMessage(
-        err.message || 'We could not save your journal entry. Your active text is preserved below.'
+        'Your entry could not be saved right now. Your conversation is still here — please try again.'
       );
+      setIsSaveModalOpen(false);
     } finally {
       setIsSaving(false);
     }
@@ -270,6 +372,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
   const handleConfirmReset = () => {
     setMessages([]);
     setInputText('');
+    setPreventAiProcessing(false);
     setErrorMessage(null);
     setCurrentStreamText('');
     setIsResetModalOpen(false);
@@ -385,30 +488,42 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
         {/* Conversation Turn Messages */}
         {messages.map((msg) => {
           const isUser = msg.role === 'user';
+          const bubbleId = `msg-bubble-${msg.id}`;
           return (
             <div
               key={msg.id}
+              id={`message-turn-${msg.id}`}
               className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
             >
-              <div className="mb-1 flex items-center gap-1.5 px-1 text-[11px] font-medium text-slate-400">
-                <span>{isUser ? 'You' : 'ThoughtKeep'}</span>
-                <span>•</span>
-                <span>
-                  {new Date(msg.timestamp).toLocaleTimeString([], {
-                    hour: 'numeric',
-                    minute: '2-digit',
-                  })}
-                </span>
+              <div
+                className="mb-1 flex items-center justify-between w-full max-w-[85%] sm:max-w-[75%] px-1 text-[11px] font-medium text-slate-400 select-none"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span>{isUser ? 'You' : 'ThoughtKeep'}</span>
+                  <span>•</span>
+                  <span>
+                    {new Date(msg.timestamp).toLocaleTimeString([], {
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                </div>
+                {/* Copy message action */}
+                <CopyMessageButton
+                  textToCopy={msg.content}
+                  isUserMessage={isUser}
+                  messageElementId={bubbleId}
+                />
               </div>
               <div
-                className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 text-sm leading-relaxed ${
+                id={bubbleId}
+                className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 text-sm leading-relaxed select-text cursor-text ${
                   isUser
-                    ? 'bg-slate-900 text-slate-50 shadow-xs'
-                    : 'border border-slate-200 bg-white text-slate-800 shadow-2xs'
+                    ? 'bg-slate-900 text-slate-50 shadow-xs selection:bg-slate-700 selection:text-white'
+                    : 'border border-slate-200 bg-white text-slate-800 shadow-2xs selection:bg-slate-200 selection:text-slate-900'
                 }`}
               >
-                {/* Directive 5: Text-only rendering, no executable HTML or scripts */}
-                <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
+                <div className="whitespace-pre-wrap font-sans select-text">{msg.content}</div>
               </div>
             </div>
           );
@@ -422,9 +537,9 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
               <span>•</span>
               <span className="animate-pulse text-slate-600">Reflecting...</span>
             </div>
-            <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-800 shadow-2xs">
+            <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-800 shadow-2xs select-text cursor-text selection:bg-slate-200 selection:text-slate-900">
               {currentStreamText ? (
-                <div className="whitespace-pre-wrap font-sans">{currentStreamText}</div>
+                <div className="whitespace-pre-wrap font-sans select-text">{currentStreamText}</div>
               ) : (
                 <div className="flex items-center gap-2 py-1 text-slate-400 text-xs">
                   <span className="h-2 w-2 animate-ping rounded-full bg-slate-400" />
@@ -472,18 +587,18 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
         </form>
       </div>
 
-      {/* Human Confirmation: Save Entry Modal (Directive 8 & Task H3) */}
+      {/* Human Confirmation: Save Entry Modal */}
       <ConfirmationModal
         isOpen={isSaveModalOpen}
         title="Save Journal Entry"
-        description="Saving this conversation will permanently store the session in your private Firestore database under your user account."
-        confirmLabel={preventAiProcessing ? "Save Private Entry" : "Generate Summary & Save"}
+        description="Saving this conversation will permanently store the session in your private Firestore database under your account."
+        confirmLabel={preventAiProcessing ? 'Save Private Entry' : 'Generate Summary & Save'}
         isProcessing={isSaving}
         onConfirm={handleConfirmSave}
         onCancel={() => !isSaving && setIsSaveModalOpen(false)}
       >
         <div className="space-y-3">
-          {/* Privacy Control (Task H3) */}
+          {/* Privacy Control */}
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5">
             <label className="flex items-start gap-3 cursor-pointer select-none">
               <input
@@ -508,7 +623,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
             <p className="font-semibold text-slate-800">Storage preview:</p>
             <ul className="mt-1 list-disc pl-4 space-y-0.5 text-[11px]">
               <li>{messages.length} turns in this reflection session</li>
-              <li>Stored under <code className="font-mono text-slate-700">users/{userId.substring(0, 8)}.../entries/</code></li>
+              <li>Stored in private user-owned entries</li>
               <li>Database rules enforce owner-only read and write</li>
               <li>Policy: <span className="font-semibold text-slate-800">{preventAiProcessing ? 'never (AI excluded)' : 'allowed'}</span></li>
             </ul>
@@ -516,12 +631,12 @@ export const JournalChat: React.FC<JournalChatProps> = ({ userId, onEntrySaved }
         </div>
       </ConfirmationModal>
 
-      {/* Human Confirmation: Discard/Reset Modal (Directive 8) */}
+      {/* Human Confirmation: Discard/Reset Modal */}
       <ConfirmationModal
         isOpen={isResetModalOpen}
         title="Start Fresh Reflection"
-        description="Are you sure you want to discard the active un-saved conversation turns and start a fresh reflection?"
-        confirmLabel="Discard & Start Fresh"
+        description="Are you sure you want to clear your current unsaved reflection turns and start a fresh session?"
+        confirmLabel="Start Fresh"
         isDestructive={true}
         onConfirm={handleConfirmReset}
         onCancel={() => setIsResetModalOpen(false)}

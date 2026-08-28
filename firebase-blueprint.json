@@ -1,18 +1,21 @@
 {
   "entities": {
     "User": {
-      "path": "users/{userId}",
+      "title": "User",
       "description": "User profile and metadata",
-      "fields": {
+      "type": "object",
+      "properties": {
         "uid": { "type": "string" },
         "createdAt": { "type": "string" },
         "lastActiveAt": { "type": "string" }
-      }
+      },
+      "required": ["uid", "createdAt"]
     },
     "JournalEntry": {
-      "path": "users/{userId}/entries/{entryId}",
+      "title": "JournalEntry",
       "description": "Individual journal conversation entry and summary",
-      "fields": {
+      "type": "object",
+      "properties": {
         "id": { "type": "string" },
         "userId": { "type": "string" },
         "title": { "type": "string" },
@@ -21,7 +24,18 @@
         "aiProcessing": { "type": "string", "enum": ["allowed", "never"] },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }
-      }
+      },
+      "required": ["id", "userId", "title", "messages", "aiProcessing", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Private user profile"
+    },
+    "/users/{userId}/entries/{entryId}": {
+      "schema": "JournalEntry",
+      "description": "Owner-bound journal entries"
     }
   }
 }

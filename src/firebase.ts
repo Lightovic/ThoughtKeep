@@ -105,28 +105,55 @@ export function setupTokenRefreshListener(onTokenRefresh?: (token: string | null
  */
 
 export async function fetchUserEntries(userId: string): Promise<JournalEntry[]> {
-  if (!userId) return [];
-  const entriesRef = collection(db, 'users', userId, 'entries');
-  const q = query(entriesRef, orderBy('createdAt', 'desc'));
-  
-  const querySnapshot = await getDocs(q);
-  const entries: JournalEntry[] = [];
+  const currentAuthUid = auth.currentUser?.uid;
+  if (!currentAuthUid || currentAuthUid !== userId) return [];
 
-  querySnapshot.forEach((docSnap) => {
-    const data = docSnap.data();
-    entries.push({
-      id: docSnap.id,
-      userId: data.userId || userId,
-      title: data.title || 'Untitled Reflection',
-      summary: data.summary || '',
-      messages: data.messages || [],
-      aiProcessing: data.aiProcessing || 'allowed',
-      createdAt: data.createdAt || new Date().toISOString(),
-      updatedAt: data.updatedAt || new Date().toISOString(),
+  try {
+    const entriesRef = collection(db, 'users', currentAuthUid, 'entries');
+    const q = query(entriesRef, orderBy('createdAt', 'desc'));
+    const querySnapshot = await getDocs(q);
+    const entries: JournalEntry[] = [];
+
+    querySnapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      entries.push({
+        id: docSnap.id,
+        userId: data.userId || currentAuthUid,
+        title: data.title || 'Untitled Reflection',
+        summary: data.summary || '',
+        messages: (data.messages || []).map((m: any) => ({
+          id: m.id || '',
+          role: m.role || 'user',
+          content: m.content || '',
+          timestamp: m.timestamp || '',
+          aiProcessing: m.aiProcessing || 'allowed',
+        })),
+        aiProcessing: data.aiProcessing || 'allowed',
+        createdAt: data.createdAt || new Date().toISOString(),
+        updatedAt: data.updatedAt || new Date().toISOString(),
+      });
     });
-  });
 
-  return entries;
+    return entries;
+  } catch (clientErr) {
+    console.warn('[ThoughtKeep Diagnostic] Client query failed, checking fallback');
+    try {
+      const token = await getFreshIdToken();
+      if (!token) return [];
+      const res = await fetch('/api/entries', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        return (json.entries || []) as JournalEntry[];
+      }
+    } catch {
+      // Fallback exhausted
+    }
+    return [];
+  }
 }
 
 export async function saveJournalEntry(
@@ -138,29 +165,104 @@ export async function saveJournalEntry(
     aiProcessing?: 'allowed' | 'never';
   }
 ): Promise<string> {
-  if (!userId) throw new Error('Cannot save entry without authenticated user ID');
+  const currentAuthUid = auth.currentUser?.uid;
+  if (!currentAuthUid) {
+    const err: any = new Error('auth_missing');
+    err.code = 'auth-missing';
+    throw err;
+  }
+  if (userId !== currentAuthUid) {
+    const err: any = new Error('auth_mismatch');
+    err.code = 'auth-mismatch';
+    throw err;
+  }
 
   const entryId = `entry_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const nowUtc = new Date().toISOString();
 
-  const docRef = doc(db, 'users', userId, 'entries', entryId);
+  const cleanMessages = (entryData.messages || []).map((m) => ({
+    id: m.id || `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    role: m.role === 'model' ? ('model' as const) : ('user' as const),
+    content: typeof m.content === 'string' ? m.content : '',
+    timestamp: m.timestamp || nowUtc,
+    aiProcessing: m.aiProcessing === 'never' ? ('never' as const) : ('allowed' as const),
+  }));
+
   const fullEntry: JournalEntry = {
     id: entryId,
-    userId,
-    title: entryData.title.trim() || 'Daily Reflection',
-    summary: entryData.summary.trim(),
-    messages: entryData.messages,
-    aiProcessing: entryData.aiProcessing || 'allowed',
+    userId: currentAuthUid,
+    title: (entryData.title || (entryData.aiProcessing === 'never' ? 'Private Reflection' : 'Daily Reflection')).trim(),
+    summary: (entryData.summary || '').trim(),
+    messages: cleanMessages,
+    aiProcessing: entryData.aiProcessing === 'never' ? 'never' : 'allowed',
     createdAt: nowUtc,
     updatedAt: nowUtc,
   };
 
-  await setDoc(docRef, fullEntry);
-  return entryId;
+  try {
+    const docRef = doc(db, 'users', currentAuthUid, 'entries', entryId);
+    await setDoc(docRef, fullEntry);
+    return entryId;
+  } catch (clientErr) {
+    console.warn('[ThoughtKeep Diagnostic] Client setDoc failed, attempting authenticated server fallback');
+    try {
+      const token = await getFreshIdToken();
+      if (token) {
+        const res = await fetch('/api/entries', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            title: fullEntry.title,
+            summary: fullEntry.summary,
+            messages: fullEntry.messages,
+            aiProcessing: fullEntry.aiProcessing,
+          }),
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          return json.id || entryId;
+        }
+      }
+    } catch {
+      // Server fallback also failed; re-throw original client error for categorization
+    }
+    throw clientErr;
+  }
 }
 
 export async function deleteJournalEntry(userId: string, entryId: string): Promise<void> {
-  if (!userId || !entryId) throw new Error('Missing parameters for entry deletion');
-  const docRef = doc(db, 'users', userId, 'entries', entryId);
-  await deleteDoc(docRef);
+  const currentAuthUid = auth.currentUser?.uid;
+  if (!currentAuthUid || userId !== currentAuthUid || !entryId) {
+    const err: any = new Error('auth_mismatch');
+    err.code = 'auth-mismatch';
+    throw err;
+  }
+
+  try {
+    const docRef = doc(db, 'users', currentAuthUid, 'entries', entryId);
+    await deleteDoc(docRef);
+  } catch (clientErr) {
+    console.warn('[ThoughtKeep Diagnostic] Client deleteDoc failed, attempting authenticated server fallback');
+    try {
+      const token = await getFreshIdToken();
+      if (token) {
+        const res = await fetch(`/api/entries/${encodeURIComponent(entryId)}`, {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (res.ok) {
+          return;
+        }
+      }
+    } catch {
+      // Fallback failed
+    }
+    throw clientErr;
+  }
 }

@@ -12,7 +12,7 @@ import {
   fetchUserEntries,
   setupTokenRefreshListener,
 } from './firebase.ts';
-import type { UserProfile, JournalEntry } from './types.ts';
+import type { UserProfile, JournalEntry, ChatMessage } from './types.ts';
 import { Navbar } from './components/Navbar.tsx';
 import { LandingPage } from './components/LandingPage.tsx';
 import { JournalChat } from './components/JournalChat.tsx';
@@ -29,6 +29,11 @@ export default function App() {
   // App Navigation View
   const [activeView, setActiveView] = useState<'journal' | 'history'>('journal');
 
+  // Lifted Active Conversation State (Issue 2: survives view switching)
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInputText, setChatInputText] = useState<string>('');
+  const [preventAiProcessing, setPreventAiProcessing] = useState<boolean>(false);
+
   // Entries State
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [isEntriesLoading, setIsEntriesLoading] = useState(false);
@@ -43,7 +48,6 @@ export default function App() {
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, async (user: User | null) => {
       if (user) {
-        // Assert emailVerified claim on client as well
         const profile: UserProfile = {
           uid: user.uid,
           email: user.email,
@@ -56,11 +60,13 @@ export default function App() {
       } else {
         setCurrentUser(null);
         setEntries([]);
+        setChatMessages([]);
+        setChatInputText('');
+        setPreventAiProcessing(false);
       }
       setIsAuthInitializing(false);
     });
 
-    // Proactive background token refresh to prevent session disruption (Directive 2)
     const cleanupRefresh = setupTokenRefreshListener();
 
     return () => {
@@ -88,7 +94,6 @@ export default function App() {
       await signInWithGoogle();
     } catch (err: any) {
       console.error('Sign-in error:', err);
-      // Calm, non-leaking plain language message (Directive 10)
       if (err.code === 'auth/popup-closed-by-user') {
         setSignInError('Sign in was cancelled. You may try again whenever you are ready.');
       } else if (err.code === 'auth/unauthorized-domain') {
@@ -104,6 +109,9 @@ export default function App() {
   const handleConfirmSignOut = async () => {
     try {
       await signOut();
+      setChatMessages([]);
+      setChatInputText('');
+      setPreventAiProcessing(false);
       setIsSignOutModalOpen(false);
       setActiveView('journal');
     } catch (err) {
@@ -113,7 +121,6 @@ export default function App() {
 
   const handleEntrySaved = (newEntry: JournalEntry) => {
     setEntries((prev) => [newEntry, ...prev]);
-    // Gently transition to history view to view the saved reflection and summary
     setActiveView('history');
   };
 
@@ -161,19 +168,28 @@ export default function App() {
           />
         ) : (
           <main id="authenticated-workspace" className="flex-1 flex flex-col max-w-5xl w-full mx-auto">
-            {activeView === 'journal' ? (
+            <div className={`flex-1 flex flex-col ${activeView === 'journal' ? 'flex' : 'hidden'}`}>
               <JournalChat
                 userId={currentUser.uid}
+                messages={chatMessages}
+                setMessages={setChatMessages}
+                inputText={chatInputText}
+                setInputText={setChatInputText}
+                preventAiProcessing={preventAiProcessing}
+                setPreventAiProcessing={setPreventAiProcessing}
                 onEntrySaved={handleEntrySaved}
               />
-            ) : (
-              <HistoryView
-                userId={currentUser.uid}
-                entries={entries}
-                isLoading={isEntriesLoading}
-                onEntryDeleted={handleEntryDeleted}
-                onStartNewJournal={() => setActiveView('journal')}
-              />
+            </div>
+            {activeView === 'history' && (
+              <div className="flex-1 flex flex-col">
+                <HistoryView
+                  userId={currentUser.uid}
+                  entries={entries}
+                  isLoading={isEntriesLoading}
+                  onEntryDeleted={handleEntryDeleted}
+                  onStartNewJournal={() => setActiveView('journal')}
+                />
+              </div>
             )}
           </main>
         )}

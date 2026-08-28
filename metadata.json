@@ -1,6 +1,10 @@
 {
   "name": "ThoughtKeep",
   "description": "A private AI journal with verified identity, owner-bound storage, and thoughtful Gemini reflections.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

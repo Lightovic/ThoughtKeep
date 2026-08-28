@@ -18,6 +18,7 @@ import {
 import type { JournalEntry } from '../types.ts';
 import { deleteJournalEntry } from '../firebase.ts';
 import { ConfirmationModal } from './ConfirmationModal.tsx';
+import { CopyMessageButton } from './CopyMessageButton.tsx';
 
 interface HistoryViewProps {
   userId: string;
@@ -62,9 +63,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         setSelectedEntry(null);
       }
       setEntryToDelete(null);
-    } catch (err: any) {
+    } catch (_err: any) {
       setErrorMessage(
-        err.message || 'We could not delete the journal entry. Please try again.'
+        'We could not delete this journal entry right now. Please try again in a moment.'
       );
     } finally {
       setIsDeleting(false);
@@ -97,7 +98,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               id="back-to-history-list-btn"
               type="button"
               onClick={() => setSelectedEntry(null)}
-              className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+              className="inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-slate-300"
             >
               <ArrowLeft className="h-4 w-4" />
               <span>Back to all entries</span>
@@ -107,7 +108,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               id="delete-selected-entry-btn"
               type="button"
               onClick={() => setEntryToDelete(selectedEntry)}
-              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+              className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 hover:text-rose-700 focus:outline-hidden focus:ring-2 focus:ring-rose-300"
             >
               <Trash2 className="h-4 w-4" />
               <span>Delete entry</span>
@@ -121,9 +122,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 <Calendar className="h-3.5 w-3.5 text-slate-400" />
                 {formatTimestamp(selectedEntry.createdAt)}
               </span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600">
+              <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 font-medium text-slate-600">
                 <Shield className="h-3 w-3 text-slate-500" />
-                AI Policy: {selectedEntry.aiProcessing}
+                AI Policy: {selectedEntry.aiProcessing === 'never' ? 'Private (AI excluded)' : 'Standard'}
               </span>
             </div>
 
@@ -146,7 +147,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
           {/* Conversation Transcript */}
           <div className="mt-8 space-y-4">
             <h3 className="text-xs font-semibold tracking-wider text-slate-400 uppercase">
-              Full Reflection Transcript ({selectedEntry.messages.length} messages)
+              Full Reflection Transcript ({selectedEntry.messages.length} {selectedEntry.messages.length === 1 ? 'message' : 'messages'})
             </h3>
 
             {selectedEntry.messages.map((msg, i) => {
@@ -156,25 +157,32 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   key={msg.id || i}
                   className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
                 >
-                  <div className="mb-1 flex items-center gap-1.5 px-1 text-[11px] font-medium text-slate-400">
-                    <span>{isUser ? 'You' : 'ThoughtKeep'}</span>
-                    <span>•</span>
-                    <span>
-                      {new Date(msg.timestamp).toLocaleTimeString([], {
-                        hour: 'numeric',
-                        minute: '2-digit',
-                      })}
-                    </span>
+                  <div className="mb-1 flex items-center justify-between w-full max-w-[90%] px-1 text-[11px] font-medium text-slate-400">
+                    <div className="flex items-center gap-1.5">
+                      <span>{isUser ? 'You' : 'ThoughtKeep'}</span>
+                      <span>•</span>
+                      <span>
+                        {new Date(msg.timestamp).toLocaleTimeString([], {
+                          hour: 'numeric',
+                          minute: '2-digit',
+                        })}
+                      </span>
+                    </div>
+                    <CopyMessageButton
+                      textToCopy={msg.content}
+                      isUserMessage={isUser}
+                      messageElementId={`history-msg-bubble-${msg.id || i}`}
+                    />
                   </div>
                   <div
-                    className={`max-w-[90%] rounded-2xl p-4 text-sm leading-relaxed ${
+                    id={`history-msg-bubble-${msg.id || i}`}
+                    className={`max-w-[90%] rounded-2xl p-4 text-sm leading-relaxed select-text cursor-text ${
                       isUser
-                        ? 'bg-slate-900 text-slate-50 shadow-xs'
-                        : 'border border-slate-200 bg-white text-slate-800 shadow-2xs'
+                        ? 'bg-slate-900 text-slate-50 shadow-xs selection:bg-slate-700 selection:text-white'
+                        : 'border border-slate-200 bg-white text-slate-800 shadow-2xs selection:bg-slate-200 selection:text-slate-900'
                     }`}
                   >
-                    {/* Safe text rendering */}
-                    <div className="whitespace-pre-wrap font-sans">{msg.content}</div>
+                    <div className="whitespace-pre-wrap font-sans select-text">{msg.content}</div>
                   </div>
                 </div>
               );
@@ -227,8 +235,18 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
         {/* Error notification */}
         {errorMessage && (
-          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-            {errorMessage}
+          <div
+            id="history-error-banner"
+            className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 flex items-center justify-between"
+          >
+            <span>{errorMessage}</span>
+            <button
+              type="button"
+              onClick={() => setErrorMessage(null)}
+              className="text-rose-500 hover:text-rose-700 text-base leading-none font-bold"
+            >
+              &times;
+            </button>
           </div>
         )}
 
@@ -258,7 +276,8 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               onClick={onStartNewJournal}
               className="mt-6 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white shadow-xs hover:bg-slate-800 focus:outline-hidden focus:ring-2 focus:ring-slate-900"
             >
-              Start a reflection
+              <MessageSquare className="h-4 w-4" />
+              <span>Start a reflection</span>
             </button>
           </div>
         )}
@@ -297,7 +316,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                           e.stopPropagation();
                           setEntryToDelete(entry);
                         }}
-                        className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600 focus:outline-hidden"
+                        className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600 focus:outline-hidden focus:ring-2 focus:ring-rose-300"
                         title="Delete entry"
                         aria-label="Delete entry"
                       >
@@ -323,8 +342,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   )}
 
                   <div className="mt-2 flex items-center justify-between border-t border-slate-100 pt-3">
-                    <span className="text-[11px] font-medium text-slate-400">
-                      ID: {entry.id.substring(0, 14)}...
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-50 px-2 py-0.5 text-[11px] font-medium text-slate-500 border border-slate-200/60">
+                      <Shield className="h-2.5 w-2.5 text-slate-400" />
+                      {entry.aiProcessing === 'never' ? 'Private' : 'Standard'}
                     </span>
                     <button
                       type="button"
@@ -346,7 +366,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       <ConfirmationModal
         isOpen={!!entryToDelete}
         title="Delete Journal Entry"
-        description="Are you sure you want to permanently delete this journal entry from your Firestore storage? This action cannot be reversed."
+        description="Are you sure you want to permanently delete this journal entry from your storage? This action cannot be reversed."
         confirmLabel="Delete Entry"
         isDestructive={true}
         isProcessing={isDeleting}
