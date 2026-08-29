@@ -19,6 +19,8 @@ import { JournalChat } from './components/JournalChat.tsx';
 import { HistoryView } from './components/HistoryView.tsx';
 import { ConfirmationModal } from './components/ConfirmationModal.tsx';
 import { SecurityAuditModal } from './components/SecurityAuditModal.tsx';
+import { SecurityScreen } from './components/SecurityScreen.tsx';
+import { Watchtower } from './components/Watchtower.tsx';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -27,7 +29,7 @@ export default function App() {
   const [signInError, setSignInError] = useState<string | null>(null);
 
   // App Navigation View
-  const [activeView, setActiveView] = useState<'journal' | 'history'>('journal');
+  const [activeView, setActiveView] = useState<'journal' | 'history' | 'security' | 'watchtower'>('journal');
 
   // Lifted Active Conversation State (Issue 2: survives view switching)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -47,6 +49,18 @@ export default function App() {
 
   // Security Posture Modal State
   const [isSecurityModalOpen, setIsSecurityModalOpen] = useState(false);
+
+  // tk-watchtower-route
+  // The Watchtower is owner-only and deliberately absent from the navigation:
+  // a visible link would confirm the page exists to everyone who signs in.
+  // It is reached by URL instead. Access is decided SERVER-SIDE against the
+  // verified token - this only chooses which view to render, and a non-owner
+  // who types the address gets the same "Not found" as any real 404.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.location.pathname === '/watchtower') {
+      setActiveView('watchtower');
+    }
+  }, []);
 
   // Listen to Auth state changes and token refresh events
   useEffect(() => {
@@ -213,6 +227,16 @@ export default function App() {
                 onEntrySaved={handleEntrySaved}
               />
             </div>
+            {activeView === 'security' && (
+              <div className="flex-1 flex flex-col">
+                <SecurityScreen />
+              </div>
+            )}
+            {activeView === 'watchtower' && (
+              <div className="flex-1 flex flex-col">
+                <Watchtower />
+              </div>
+            )}
             {activeView === 'history' && (
               <div className="flex-1 flex flex-col">
                 <HistoryView

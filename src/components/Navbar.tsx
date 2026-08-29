@@ -9,9 +9,9 @@ import type { UserProfile } from '../types.ts';
 
 interface NavbarProps {
   user: UserProfile | null;
-  activeView: 'journal' | 'history';
+  activeView: 'journal' | 'history' | 'security' | 'watchtower';
   historyCount: number;
-  onNavigate: (view: 'journal' | 'history') => void;
+  onNavigate: (view: 'journal' | 'history' | 'security' | 'watchtower') => void;
   onOpenSecurity: () => void;
   onRequestSignOut: () => void;
 }
@@ -153,6 +153,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {historyCount}
                 </span>
               )}
+            </button>
+            <button
+              id="nav-security-tab-btn"
+              type="button"
+              onClick={() => onNavigate('security')}
+              className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-sm font-medium transition-all focus:outline-hidden focus:ring-2 focus:ring-slate-300 ${
+                activeView === 'security'
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <ShieldCheck className="h-4 w-4" />
+              <span>Security</span>
             </button>
           </nav>
         )}

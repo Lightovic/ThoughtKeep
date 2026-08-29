@@ -12,6 +12,8 @@ import { GateBlockedError } from './server/screening.js';
 import { fetchCurrentWeather, validateCoordinates, type WeatherData } from './server/weather.js';
 import { logSecurityEvent } from './server/logger.js';
 import { recordLedgerEvent, readLedger } from './server/ledger.js';
+import { checkQuota, recordUsage, recordBlock, estimateTokens } from './server/quota.js';
+import { isOwner, readWatchtowerMetrics, updateLimits } from './server/watchtower.js';
 
 async function startServer() {
   const app = express();
@@ -125,6 +127,22 @@ async function startServer() {
       }
     }
 
+    // COST CONTROL: both daily limits are checked before Gemini is called.
+    const quota = await checkQuota(user.uid);
+    if (!quota.allowed) {
+      void recordLedgerEvent(user.uid, {
+        action: 'QUOTA_EXCEEDED', decision: 'BLOCKED',
+        category: quota.reason === 'PER_USER_LIMIT' ? 'daily allowance' : 'demo capacity',
+        severity: 'LOW',
+      });
+      res.status(429).json({
+        error: quota.reason === 'PER_USER_LIMIT'
+          ? 'You have used your reflections for today. Your allowance resets at midnight IST. Your journal and history are unaffected.'
+          : 'ThoughtKeep has reached its shared daily capacity for this demo. Sign-in and your history still work, and new reflections resume at midnight IST.',
+      });
+      return;
+    }
+
     // Set headers for SSE streaming
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -141,9 +159,14 @@ async function startServer() {
         locale,
         resolvedWeather
       );
+      let emittedChars = 0;
       for await (const chunk of stream) {
+        emittedChars += chunk.length;
         res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
       }
+
+      // Count the message against both daily counters and the Watchtower series.
+      void recordUsage(user.uid, estimateTokens(message) + Math.ceil(emittedChars / 4));
       // THE LEDGER: the reflection passed both gates.
       void recordLedgerEvent(user.uid, {
         action: 'RESPONSE_SCREENED',
@@ -191,6 +214,7 @@ async function startServer() {
       // THE LEDGER: record the block. Category only, never content.
       if (isGateBlock) {
         const gerr = err as GateBlockedError;
+        void recordBlock(gerr.category);
         void recordLedgerEvent(user.uid, {
           action: gerr.category === 'sensitive data' ? 'SENSITIVE_DATA_DETECTED' : 'CONTENT_BLOCKED',
           decision: 'BLOCKED',
@@ -363,6 +387,37 @@ async function startServer() {
       res.json({ events });
     } catch {
       res.status(500).json({ error: 'Unable to load your security events right now.' });
+    }
+  });
+
+  /**
+   * THE WATCHTOWER — owner only.
+   * A non-owner receives a plain 404. We do not return 403, because 403
+   * confirms the route exists; "not found" reveals nothing at all.
+   */
+  app.get('/api/watchtower', requireAuth, async (req: AuthenticatedRequest, res) => {
+    if (!isOwner(req.user!.uid)) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    try {
+      res.json(await readWatchtowerMetrics());
+    } catch {
+      res.status(500).json({ error: 'Unable to load metrics right now.' });
+    }
+  });
+
+  app.post('/api/watchtower/limits', requireAuth, async (req: AuthenticatedRequest, res) => {
+    if (!isOwner(req.user!.uid)) {
+      res.status(404).json({ error: 'Not found' });
+      return;
+    }
+    try {
+      const { perUserDailyLimit, appWideDailyLimit } = req.body || {};
+      await updateLimits(perUserDailyLimit, appWideDailyLimit);
+      res.json(await readWatchtowerMetrics());
+    } catch {
+      res.status(500).json({ error: 'Unable to update limits right now.' });
     }
   });
 
