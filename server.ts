@@ -16,7 +16,7 @@ import { readProfile, writeProfile, buildCompanionGuidance } from './server/prof
 import { exportUserData, eraseUserData, normalizeRetention, computeExpiresAt } from './server/governance.js';
 import { suggestTools } from './server/toolSuggestions.js';
 import { synthesizeSpeech, type VoiceStyle } from './server/tts.js';
-import { checkQuota, recordUsage, recordBlock, estimateTokens } from './server/quota.js';
+import { checkQuota, recordUsage, recordBlock, estimateTokens, checkTtsBudget, recordTtsUsage } from './server/quota.js';
 import { isOwner, readWatchtowerMetrics, updateLimits } from './server/watchtower.js';
 
 async function startServer() {
@@ -81,8 +81,23 @@ async function startServer() {
 
     const style: VoiceStyle = voiceStyle;
 
+    // COST CONTROL: voice is the most expensive call in the app, so it gets
+    // its own daily character allowance, counted like the chat quota.
+    const user = req.user!;
+    if (!(await checkTtsBudget(user.uid, text.length))) {
+      void recordLedgerEvent(user.uid, {
+        action: 'QUOTA_EXCEEDED', decision: 'BLOCKED',
+        category: 'voice allowance', severity: 'LOW',
+      });
+      res.status(429).json({
+        error: 'You have used your voice playback for today. It resets at midnight IST. You can still read the reflection.',
+      });
+      return;
+    }
+
     try {
       const audio = await synthesizeSpeech(text, style);
+      await recordTtsUsage(user.uid, text.length);
 
       res.setHeader('Content-Type', 'audio/mpeg');
       res.setHeader('Cache-Control', 'no-store');

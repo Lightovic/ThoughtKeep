@@ -148,12 +148,17 @@ export async function recordUsage(uid: string, tokens: number): Promise<void> {
       // Roll the user's counter over at the IST boundary.
       const userRollover = u.dateKey !== day;
       isNewUserToday = userRollover;
-      tx.set(userRef, {
-        dateKey: day,
-        messageCount: userRollover ? 1 : (u.messageCount ?? 0) + 1,
-        tokenEstimate: userRollover ? tokens : (u.tokenEstimate ?? 0) + tokens,
-        updatedAt: new Date().toISOString(),
-      });
+      tx.set(
+        userRef,
+        {
+          dateKey: day,
+          messageCount: userRollover ? 1 : (u.messageCount ?? 0) + 1,
+          tokenEstimate: userRollover ? tokens : (u.tokenEstimate ?? 0) + tokens,
+          ...(userRollover ? { ttsChars: 0 } : {}),
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true },
+      );
 
       const appRollover = m.dateKey !== day;
       tx.set(
@@ -196,5 +201,65 @@ export async function recordBlock(category: string): Promise<void> {
       );
   } catch {
     /* best effort */
+  }
+}
+
+
+/* ------------------------------------------------------------------ */
+/* TEXT-TO-SPEECH BUDGET                                               */
+/* ------------------------------------------------------------------ */
+/*
+ * Chirp 3 HD costs roughly USD 30 per million characters after a 1M/month
+ * free allowance - by a wide margin the most expensive call this app can
+ * make. The chat route is metered; without an equivalent limit here a single
+ * signed-in account could spend the project's whole budget by replaying one
+ * request, so voice gets its own daily character allowance.
+ *
+ * Counted in CHARACTERS rather than calls, because cost follows characters.
+ */
+const DEFAULT_TTS_DAILY_CHARS = 20000;
+
+export async function readTtsDailyLimit(): Promise<number> {
+  try {
+    const snap = await getAdminFirestore().collection('admin').doc('config').get();
+    const v = snap.exists ? (snap.data() ?? {}).ttsDailyCharLimit : undefined;
+    return typeof v === 'number' && Number.isFinite(v) && v > 0
+      ? Math.floor(v)
+      : DEFAULT_TTS_DAILY_CHARS;
+  } catch {
+    return DEFAULT_TTS_DAILY_CHARS;
+  }
+}
+
+/** True when this user may synthesise `chars` more characters today. */
+export async function checkTtsBudget(uid: string, chars: number): Promise<boolean> {
+  if (OWNER_UID && uid === OWNER_UID) return true;
+  const day = istDateKey();
+  const limit = await readTtsDailyLimit();
+  try {
+    const snap = await getAdminFirestore()
+      .collection('users').doc(uid).collection('usage').doc('daily').get();
+    const d = snap.exists ? snap.data() ?? {} : {};
+    const used = d.dateKey === day && typeof d.ttsChars === 'number' ? d.ttsChars : 0;
+    return used + chars <= limit;
+  } catch {
+    // Cost control, not a security boundary: a metering outage must not
+    // silence the app. Consistent with checkQuota above.
+    return true;
+  }
+}
+
+/** Record synthesised characters against the user and the app-wide totals. */
+export async function recordTtsUsage(uid: string, chars: number): Promise<void> {
+  const day = istDateKey();
+  try {
+    const db = getAdminFirestore();
+    await db.collection('users').doc(uid).collection('usage').doc('daily')
+      .set({ dateKey: day, ttsChars: FieldValue.increment(chars) }, { merge: true });
+    await db.collection('admin').doc('metrics')
+      .set({ allTimeTtsChars: FieldValue.increment(chars) }, { merge: true });
+  } catch (err: any) {
+    const code = typeof err?.code === 'string' ? err.code : 'UNKNOWN';
+    console.warn(`[ThoughtKeep TTS] usage metering write failed: ${code}`);
   }
 }

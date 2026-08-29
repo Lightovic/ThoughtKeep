@@ -66,6 +66,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
 }) => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentStreamText, setCurrentStreamText] = useState('');
+  const [toolSuggestions, setToolSuggestions] = useState<Array<{ id: string; label: string; url: string; reason: string }>>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Modals
@@ -411,6 +412,10 @@ export const JournalChat: React.FC<JournalChatProps> = ({
               accumulatedText += parsed.text;
               setCurrentStreamText(accumulatedText);
             }
+            if (Array.isArray(parsed.suggestions)) {
+              // Server-supplied, from a fixed allowlist of Google tool URLs.
+              setToolSuggestions(parsed.suggestions.slice(0, 2));
+            }
           }
         }
 
@@ -576,6 +581,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
 
       // Reset local conversation and notify parent
       setMessages([]);
+      setToolSuggestions([]);
       setInputText('');
       setIsSaveModalOpen(false);
       setPreventAiProcessing(false);
@@ -592,6 +598,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
 
   const handleConfirmReset = () => {
     setMessages([]);
+      setToolSuggestions([]);
     setInputText('');
     setPreventAiProcessing(false);
     setErrorMessage(null);
@@ -780,6 +787,36 @@ export const JournalChat: React.FC<JournalChatProps> = ({
 
       {/* Bottom Input Form */}
       <div className="shrink-0 border-t border-slate-200 bg-white p-4 sm:px-6">
+        {toolSuggestions.length > 0 && (
+          <div className="mx-auto mb-2 max-w-4xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs text-slate-400">Might help:</span>
+              {toolSuggestions.map((sug) => (
+                <a
+                  key={sug.id}
+                  href={sug.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`Why am I seeing this? ${sug.reason}`}
+                  aria-label={`${sug.label}. Why am I seeing this? ${sug.reason}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
+                >
+                  {sug.label}
+                  <span aria-hidden="true" className="text-slate-400">&#8599;</span>
+                </a>
+              ))}
+              <button
+                type="button"
+                onClick={() => setToolSuggestions([])}
+                aria-label="Dismiss suggestions"
+                className="rounded-full px-2 py-1 text-xs text-slate-400 hover:text-slate-600"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
         <form onSubmit={handleSendMessage} className="mx-auto max-w-4xl">
           <div className="relative flex items-end rounded-2xl border border-slate-300 bg-white shadow-2xs focus-within:border-slate-900 focus-within:ring-1 focus-within:ring-slate-900">
             <textarea
@@ -819,6 +856,13 @@ export const JournalChat: React.FC<JournalChatProps> = ({
                   : null
               }
             />
+          </div>
+
+          <div
+            className="mt-2 px-1 text-[11px] text-slate-400"
+            aria-label="Conversation language is auto-detected"
+          >
+            🌐 Conversation language: Auto-detect
           </div>
 
           <div className="mt-2 flex items-center justify-between px-1 text-[11px] text-slate-400">
