@@ -12,6 +12,10 @@ import { GateBlockedError } from './server/screening.js';
 import { fetchCurrentWeather, validateCoordinates, type WeatherData } from './server/weather.js';
 import { logSecurityEvent } from './server/logger.js';
 import { recordLedgerEvent, readLedger } from './server/ledger.js';
+import { readProfile, writeProfile, buildCompanionGuidance } from './server/profile.js';
+import { exportUserData, eraseUserData, normalizeRetention, computeExpiresAt } from './server/governance.js';
+import { suggestTools } from './server/toolSuggestions.js';
+import { synthesizeSpeech, type VoiceStyle } from './server/tts.js';
 import { checkQuota, recordUsage, recordBlock, estimateTokens } from './server/quota.js';
 import { isOwner, readWatchtowerMetrics, updateLimits } from './server/watchtower.js';
 
@@ -39,6 +43,7 @@ async function startServer() {
       "img-src 'self' data: https://lh3.googleusercontent.com https://*.googleusercontent.com",
       "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com https://*.googleapis.com https://*.firebaseio.com https://api.open-meteo.com",
       "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com",
+      "media-src 'self' blob:",
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'",
@@ -46,6 +51,48 @@ async function startServer() {
     res.setHeader('Content-Security-Policy', cspDirectives.join('; '));
 
     next();
+  });
+
+  // Protected Google Cloud Text-to-Speech endpoint.
+  // Google credentials remain server-side; the browser receives only audio.
+  app.post('/api/tts', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const { text, voiceStyle } = req.body || {};
+
+    if (typeof text !== 'string' || !text.trim()) {
+      res.status(400).json({
+        error: 'No text was provided for voice playback.',
+      });
+      return;
+    }
+
+    if (text.length > 8000) {
+      res.status(400).json({
+        error: 'The voice response is too long to play.',
+      });
+      return;
+    }
+
+    if (voiceStyle !== 'girl' && voiceStyle !== 'boy') {
+      res.status(400).json({
+        error: 'Invalid voice selection.',
+      });
+      return;
+    }
+
+    const style: VoiceStyle = voiceStyle;
+
+    try {
+      const audio = await synthesizeSpeech(text, style);
+
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.send(audio);
+    } catch (_err) {
+      res.status(500).json({
+        error: 'Voice playback is temporarily unavailable. You can still read the response or try again.',
+      });
+    }
   });
 
   // Operational health endpoint (Task C3: operational facts only, no security marketing claims)
@@ -150,6 +197,7 @@ async function startServer() {
     res.flushHeaders?.();
 
     try {
+      const companionProfile = await readProfile(user.uid);
       const stream = streamJournalChat(
         user.uid,
         history as ChatTurn[],
@@ -157,7 +205,8 @@ async function startServer() {
         processingPolicy,
         timezone,
         locale,
-        resolvedWeather
+        resolvedWeather,
+        buildCompanionGuidance(companionProfile.role)
       );
       let emittedChars = 0;
       for await (const chunk of stream) {
@@ -174,6 +223,12 @@ async function startServer() {
         category: 'reflection',
         severity: 'LOW',
       });
+      // Suggestions are derived from the USER's own message, never the model's
+      // reply, and every URL is a fixed constant from a small allowlist.
+      const toolSuggestions = suggestTools(message.trim());
+      if (toolSuggestions.length > 0) {
+        res.write(`data: ${JSON.stringify({ suggestions: toolSuggestions })}\n\n`);
+      }
       res.write('data: [DONE]\n\n');
       res.end();
     } catch (err: any) {
@@ -336,6 +391,13 @@ async function startServer() {
       updatedAt: nowUtc,
     };
 
+    // GOVERNANCE: an explicit retention choice becomes a Firestore TTL field.
+    // "forever" writes NO field, which is how Firestore disables TTL per document.
+    const retention = normalizeRetention((req.body || {}).retention);
+    const expiresAt = computeExpiresAt(retention);
+    const entryDocWithPolicy: Record<string, unknown> = { ...entryDoc, retention };
+    if (expiresAt) entryDocWithPolicy.expiresAt = expiresAt;
+
     try {
       const firestore = getAdminFirestore();
       await firestore
@@ -343,7 +405,7 @@ async function startServer() {
         .doc(user.uid)
         .collection('entries')
         .doc(entryId)
-        .set(entryDoc);
+        .set(entryDocWithPolicy);
 
       res.json({ success: true, id: entryId, entry: entryDoc });
     } catch (_err) {
@@ -418,6 +480,62 @@ async function startServer() {
       res.json(await readWatchtowerMetrics());
     } catch {
       res.status(500).json({ error: 'Unable to update limits right now.' });
+    }
+  });
+
+  /**
+   * THE COMPANION — the user's own optional role description.
+   * Owner-bound by construction: the uid comes from the verified token, so
+   * there is no parameter with which to request someone else's profile.
+   */
+  app.get('/api/profile', requireAuth, async (req: AuthenticatedRequest, res) => {
+    res.json(await readProfile(req.user!.uid));
+  });
+
+  app.post('/api/profile', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      // writeProfile sanitises; an instruction-like or malformed role is
+      // stored as null rather than rejected loudly, so the user is never
+      // taught which strings the filter dislikes.
+      res.json(await writeProfile(req.user!.uid, (req.body || {}).role));
+    } catch {
+      res.status(500).json({ error: 'Unable to save that right now. Please try again.' });
+    }
+  });
+
+  /**
+   * PORTABILITY - everything we hold about this user, on demand.
+   * The uid comes from the verified token, so nobody can export anyone else.
+   */
+  app.get('/api/export', requireAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      res.json(await exportUserData(req.user!.uid));
+    } catch {
+      res.status(500).json({ error: 'Unable to prepare your export right now.' });
+    }
+  });
+
+  /**
+   * ERASURE - permanently delete everything this user owns.
+   * Irreversible, so it is a DELETE on an explicit endpoint and the interface
+   * requires the user to type DELETE first (directive 8: the AI proposes, the
+   * user decides, the system enforces).
+   */
+  app.delete('/api/account', requireAuth, async (req: AuthenticatedRequest, res) => {
+    const user = req.user!;
+    try {
+      const result = await eraseUserData(user.uid);
+      logSecurityEvent({
+        action: 'ACCOUNT_ERASED',
+        resourceId: `user:${user.uid.substring(0, 6)}...`,
+        decision: 'ALLOW',
+        policy: 'USER_INITIATED_ERASURE',
+        severity: 'INFO',
+        details: { reason: 'USER_REQUESTED' },
+      });
+      res.json({ success: true, documentsDeleted: result.deleted });
+    } catch {
+      res.status(500).json({ error: 'Unable to complete deletion right now. Nothing was deleted.' });
     }
   });
 

@@ -18,6 +18,8 @@ export interface JournalEntry {
   summary: string;
   messages: ChatMessage[];
   aiProcessing: 'allowed' | 'never';
+  retention?: 'forever' | '7d' | '30d' | '365d';
+  expiresAt?: unknown;
   createdAt: string; // ISO UTC string
   updatedAt: string; // ISO UTC string
 }

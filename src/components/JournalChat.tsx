@@ -18,6 +18,7 @@ import { getFreshIdToken, saveJournalEntry, updateJournalEntry } from '../fireba
 import { ConfirmationModal } from './ConfirmationModal.tsx';
 import { CopyMessageButton } from './CopyMessageButton.tsx';
 import { isExplicitWeatherRequest } from '../utils/weatherIntent.ts';
+import { VoiceControls } from './VoiceControls.tsx';
 
 interface JournalChatProps {
   userId: string;
@@ -36,6 +37,21 @@ const STARTER_PROMPTS = [
   "What's been occupying your mind lately?",
   'What went well today, and what would you like to carry forward?',
 ];
+
+function getSelectedRetention(): 'forever' | '7d' | '30d' | '365d' {
+  try {
+    const value = localStorage.getItem('thoughtkeep-retention');
+
+    return value === '7d' ||
+      value === '30d' ||
+      value === '365d' ||
+      value === 'forever'
+      ? value
+      : '30d';
+  } catch {
+    return '30d';
+  }
+}
 
 export const JournalChat: React.FC<JournalChatProps> = ({
   userId,
@@ -59,6 +75,8 @@ export const JournalChat: React.FC<JournalChatProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const voiceLanguage =
+    typeof navigator !== 'undefined' ? (navigator.language || 'en-US') : 'en-US';
 
   /**
    * PHASE4_UI_FIX_MARKER
@@ -460,6 +478,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
     setErrorMessage(null);
 
     const chosenPolicy: 'allowed' | 'never' = preventAiProcessing ? 'never' : 'allowed';
+    const selectedRetention = getSelectedRetention();
 
     try {
       const token = await getFreshIdToken();
@@ -538,6 +557,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
           summary: entrySummary,
           messages: updatedMessages,
           aiProcessing: chosenPolicy,
+          retention: selectedRetention,
         });
       }
 
@@ -785,6 +805,22 @@ export const JournalChat: React.FC<JournalChatProps> = ({
               </button>
             </div>
           </div>
+
+          <div className="mt-2">
+            <VoiceControls
+              language={voiceLanguage}
+              onTranscript={(text) => {
+                setInputText(text);
+                requestAnimationFrame(() => textareaRef.current?.focus());
+              }}
+              speakText={
+                messages.length > 0 && messages[messages.length - 1].role === 'model'
+                  ? messages[messages.length - 1].content
+                  : null
+              }
+            />
+          </div>
+
           <div className="mt-2 flex items-center justify-between px-1 text-[11px] text-slate-400">
             <span>Press Enter to send, Shift + Enter for new line</span>
             <span>{inputText.length} characters</span>

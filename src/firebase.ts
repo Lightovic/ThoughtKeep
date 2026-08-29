@@ -23,11 +23,31 @@ import {
   deleteDoc,
   query,
   orderBy,
+  Timestamp,
 } from 'firebase/firestore';
 import type { JournalEntry } from './types.ts';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+
+function computeClientExpiry(
+  retention: 'forever' | '7d' | '30d' | '365d',
+  from: Date = new Date(),
+): Timestamp | null {
+  if (retention === 'forever') return null;
+
+  const days =
+    retention === '7d'
+      ? 7
+      : retention === '30d'
+        ? 30
+        : 365;
+
+  const expiry = new Date(from);
+  expiry.setUTCDate(expiry.getUTCDate() + days);
+
+  return Timestamp.fromDate(expiry);
+}
 
 export const auth = getAuth(app);
 export const db = getFirestore(app);
@@ -164,6 +184,7 @@ export async function saveJournalEntry(
     summary: string;
     messages: JournalEntry['messages'];
     aiProcessing?: 'allowed' | 'never';
+    retention?: 'forever' | '7d' | '30d' | '365d';
     createdAt?: string;
   }
 ): Promise<string> {
@@ -193,6 +214,16 @@ export async function saveJournalEntry(
     aiProcessing: m.aiProcessing === 'never' ? ('never' as const) : ('allowed' as const),
   }));
 
+  const selectedRetention =
+    entryData.retention === '7d' ||
+    entryData.retention === '30d' ||
+    entryData.retention === '365d' ||
+    entryData.retention === 'forever'
+      ? entryData.retention
+      : '30d';
+
+  const expiresAt = computeClientExpiry(selectedRetention);
+
   const fullEntry: JournalEntry = {
     id: entryId,
     userId: currentAuthUid,
@@ -200,6 +231,8 @@ export async function saveJournalEntry(
     summary: (entryData.summary || '').trim(),
     messages: cleanMessages,
     aiProcessing: entryData.aiProcessing === 'never' ? 'never' : 'allowed',
+    retention: selectedRetention,
+    ...(expiresAt ? { expiresAt } : {}),
     createdAt: entryData.createdAt || nowUtc,
     updatedAt: nowUtc,
   };
@@ -225,6 +258,7 @@ export async function saveJournalEntry(
             summary: fullEntry.summary,
             messages: fullEntry.messages,
             aiProcessing: fullEntry.aiProcessing,
+            retention: entryData.retention,
             createdAt: fullEntry.createdAt,
           }),
         });
@@ -249,6 +283,7 @@ export async function updateJournalEntry(
     summary?: string;
     messages: JournalEntry['messages'];
     aiProcessing?: 'allowed' | 'never';
+    retention?: 'forever' | '7d' | '30d' | '365d';
   }
 ): Promise<void> {
   const currentAuthUid = auth.currentUser?.uid;
@@ -281,6 +316,7 @@ export async function updateJournalEntry(
     messages: cleanMessages,
     updatedAt: nowUtc,
     aiProcessing: entryData.aiProcessing === 'never' ? 'never' : 'allowed',
+    ...(entryData.retention ? { retention: entryData.retention } : {}),
   };
 
   if (typeof entryData.title === 'string' && entryData.title.trim()) {

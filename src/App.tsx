@@ -21,6 +21,7 @@ import { ConfirmationModal } from './components/ConfirmationModal.tsx';
 import { SecurityAuditModal } from './components/SecurityAuditModal.tsx';
 import { SecurityScreen } from './components/SecurityScreen.tsx';
 import { Watchtower } from './components/Watchtower.tsx';
+import { SettingsScreen } from './components/SettingsScreen.tsx';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -29,7 +30,7 @@ export default function App() {
   const [signInError, setSignInError] = useState<string | null>(null);
 
   // App Navigation View
-  const [activeView, setActiveView] = useState<'journal' | 'history' | 'security' | 'watchtower'>('journal');
+  const [activeView, setActiveView] = useState<'journal' | 'history' | 'security' | 'watchtower' | 'settings'>('journal');
 
   // Lifted Active Conversation State (Issue 2: survives view switching)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -227,6 +228,15 @@ export default function App() {
                 onEntrySaved={handleEntrySaved}
               />
             </div>
+            {activeView === 'settings' && (
+              <div className="flex-1 flex flex-col">
+                <SettingsScreen
+                  entries={entries}
+                  onEntryDeleted={handleEntryDeleted}
+                  onEntriesChanged={() => currentUser && loadEntries(currentUser.uid)}
+                />
+              </div>
+            )}
             {activeView === 'security' && (
               <div className="flex-1 flex flex-col">
                 <SecurityScreen />

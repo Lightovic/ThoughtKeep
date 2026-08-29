@@ -4,14 +4,14 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { BookOpen, PenLine, LogOut, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { BookOpen, PenLine, LogOut, ShieldCheck, CheckCircle2, Settings, Menu, X } from 'lucide-react';
 import type { UserProfile } from '../types.ts';
 
 interface NavbarProps {
   user: UserProfile | null;
-  activeView: 'journal' | 'history' | 'security' | 'watchtower';
+  activeView: 'journal' | 'history' | 'security' | 'watchtower' | 'settings';
   historyCount: number;
-  onNavigate: (view: 'journal' | 'history' | 'security' | 'watchtower') => void;
+  onNavigate: (view: 'journal' | 'history' | 'security' | 'watchtower' | 'settings') => void;
   onOpenSecurity: () => void;
   onRequestSignOut: () => void;
 }
@@ -27,6 +27,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [isUserPopoverOpen, setIsUserPopoverOpen] = useState(false);
   const [isAvatarHovered, setIsAvatarHovered] = useState(false);
   const [isLogoHovered, setIsLogoHovered] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const popoverRef = useRef<HTMLDivElement>(null);
   const userButtonRef = useRef<HTMLButtonElement>(null);
@@ -116,7 +117,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
         {/* Center: Navigation Controls (Only if signed in) */}
         {user && (
-          <nav id="navbar-view-navigation" className="flex items-center gap-1 sm:gap-2">
+          <nav id="navbar-view-navigation" className="hidden items-center gap-1 sm:flex sm:gap-2">
             <button
               id="nav-journal-tab-btn"
               type="button"
@@ -170,8 +171,26 @@ export const Navbar: React.FC<NavbarProps> = ({
           </nav>
         )}
 
+        {/* Mobile menu trigger */}
+        {user && (
+          <button
+            id="navbar-mobile-menu-btn"
+            type="button"
+            onClick={() => setIsMobileMenuOpen((open) => !open)}
+            aria-label={isMobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            aria-expanded={isMobileMenuOpen}
+            className="inline-flex items-center justify-center rounded-xl p-2 text-slate-600 hover:bg-slate-100 focus:outline-hidden focus:ring-2 focus:ring-slate-300 sm:hidden"
+          >
+            {isMobileMenuOpen ? (
+              <X className="h-5 w-5" />
+            ) : (
+              <Menu className="h-5 w-5" />
+            )}
+          </button>
+        )}
+
         {/* Right: Security Posture & Interactive User Menu (Issue 4) */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="hidden items-center gap-2 sm:flex sm:gap-3">
           <button
             id="open-security-modal-btn"
             type="button"
@@ -286,6 +305,19 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                   <div className="mt-3 pt-2 border-t border-slate-100">
                     <button
+                      id="popover-settings-btn"
+                      type="button"
+                      onClick={() => {
+                        setIsUserPopoverOpen(false);
+                        onNavigate('settings');
+                      }}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-colors focus:outline-hidden focus:ring-2 focus:ring-slate-300"
+                    >
+                      <Settings className="h-3.5 w-3.5" />
+                      <span>Settings</span>
+                    </button>
+
+                    <button
                       id="popover-sign-out-btn"
                       type="button"
                       onClick={() => {
@@ -304,6 +336,96 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
       </div>
+
+      {/* Mobile navigation menu */}
+      {user && isMobileMenuOpen && (
+        <div
+          id="navbar-mobile-menu"
+          className="border-t border-slate-200 bg-white px-4 py-3 shadow-lg sm:hidden"
+        >
+          <div className="mx-auto flex max-w-5xl flex-col gap-1">
+            <button
+              id="mobile-nav-journal"
+              type="button"
+              onClick={() => {
+                onNavigate('journal');
+                setIsMobileMenuOpen(false);
+              }}
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <PenLine className="h-4 w-4 shrink-0" />
+              <span>Journal</span>
+            </button>
+
+            <button
+              id="mobile-nav-history"
+              type="button"
+              onClick={() => {
+                onNavigate('history');
+                setIsMobileMenuOpen(false);
+              }}
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <BookOpen className="h-4 w-4 shrink-0" />
+              <span>History</span>
+            </button>
+
+            <button
+              id="mobile-nav-security"
+              type="button"
+              onClick={() => {
+                onNavigate('security');
+                setIsMobileMenuOpen(false);
+              }}
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <ShieldCheck className="h-4 w-4 shrink-0" />
+              <span>Security</span>
+            </button>
+
+            <button
+              id="mobile-nav-security-posture"
+              type="button"
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                onOpenSecurity();
+              }}
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" />
+              <span>Security Posture</span>
+            </button>
+
+            <button
+              id="mobile-nav-settings"
+              type="button"
+              onClick={() => {
+                onNavigate('settings');
+                setIsMobileMenuOpen(false);
+              }}
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+            >
+              <Settings className="h-4 w-4 shrink-0" />
+              <span>Settings</span>
+            </button>
+
+            <div className="my-1 border-t border-slate-100" />
+
+            <button
+              id="mobile-nav-sign-out"
+              type="button"
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                onRequestSignOut();
+              }}
+              className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-rose-700 hover:bg-rose-50"
+            >
+              <LogOut className="h-4 w-4 shrink-0" />
+              <span>Sign out</span>
+            </button>
+          </div>
+        </div>
+      )}
     </header>
   );
 };
