@@ -178,6 +178,8 @@ A failed test is recorded as a security finding. After a fix, the test is repeat
 
 **Evidence:** Browser screenshot from Account B showing an empty Journal History.
 
+**Evidence note:** Verified at the UI level here; database-level enforcement is evidenced by the published Firestore rules and the automated cross-user denial tests.
+
 **Result:** PASS
 
 ### T9 — Forged Identity / Owner Binding
@@ -395,3 +397,127 @@ The **Never send this entry to AI** option was enabled. The save dialog showed `
 **Result:** PASS
 
 **Note:** Firebase client configuration is intentionally present in the browser application and is not treated as a server secret. The server-side Gemini credential remains supplied through the Cloud Run secret reference.
+# Findings discovered and fixed during development
+
+Recorded because a security document in which everything passed first time
+reads as untested to anyone who has done this work. Each entry is a real
+failure, its root cause, and its fix.
+
+### F1 — Outbound screening ran after content had already been streamed
+`streamJournalChat` yielded every chunk to the client inside the generation
+loop and called `screenOutbound()` only afterwards. Screening content after it
+has been displayed is not screening; once Model Armor was placed at that choke
+point, harmful content would already have reached the user.
+**Fixed:** the response is buffered in full, screened, and only then emitted
+progressively. Time-to-first-token is deliberately traded for a real outbound
+boundary.
+
+### F2 — The AI-processing boundary was dead code
+Both screening contexts hardcoded `entryAiProcessing: 'allowed'`, making the
+per-entry privacy check unreachable.
+**Fixed:** the real policy is plumbed from client to model layer, and a
+missing or unreadable value fails closed to `never`.
+
+### F3 — The application claimed security it did not have
+The audit modal displayed "Enforced" for an unenforced control, and
+`/api/health` advertised `screeningChokePoints: 'active'` over what were
+pass-throughs.
+**Fixed:** honest status vocabulary (ENFORCED / PARTIAL / PLANNED) throughout,
+and `/api/health` reduced to operational facts. A health endpoint must not
+advertise security properties.
+
+### F4 — Firestore rules were defeated by an overlapping wildcard
+A broad `match /users/{userId}/{document=**}` re-granted write access to
+`securityEvents`, because Firestore grants access if **any** matching rule
+allows — a deny in one block never overrides an allow in another. The audit
+trail was editable by its own subject.
+**Fixed:** the wildcard was removed and every owned path enumerated explicitly.
+
+### F5 — Identity claims were validated before signature verification
+Hand-rolled JWT code checked `exp`, `aud`, `iss` and `email_verified` *before*
+verifying the signature, so every decision was made on attacker-controlled
+data.
+**Fixed:** replaced with the Firebase Admin SDK's `verifyIdToken()`, which
+verifies signature and standard claims before exposing any claim. Identity
+policy moved into a separate pure function with its own unit tests.
+
+### F6 — Raw error messages were written to the security log
+The auth middleware logged `details: { reason: error?.message }`, which can
+carry attacker-supplied token content — making the audit log a log-injection
+surface.
+**Fixed:** only fixed category codes are logged.
+
+### F7 — Three Firestore databases existed in the project
+`gcloud firestore databases list` revealed two `ai-studio-*` databases
+alongside `(default)`. Rules published to one database protect nothing if the
+application reads another — the cause of a long-running save failure.
+**Fixed:** confirmed the client uses `(default)`; rules published there.
+
+### F8 — The voice endpoint had no spending limit
+Chat was metered from the start. Google Cloud Text-to-Speech was added later
+and left unmetered, while accepting 8,000 characters per call with no cap on
+calls. At roughly USD 30 per million characters, one account replaying that
+request could have exceeded the project's entire budget several times over.
+**Fixed:** voice received its own daily character allowance, counted in
+characters because that is how the cost accrues, with owner exemption and a
+configurable limit.
+
+### F9 — The voice counter was silently reset by every chat message
+`recordUsage` wrote the daily usage document with a Firestore `set` and no
+`{ merge: true }`, which replaces the whole document. When `ttsChars` was
+later added by a different code path, every chat message erased it — so the
+spending limit reset itself continuously. No error, no failing test; the bug
+was visible only by reading the database directly.
+**Fixed:** `{ merge: true }` added, plus an explicit `ttsChars` reset at the
+IST day boundary, which merge alone would not have done.
+
+### F10 — Tool suggestions were computed but never displayed
+The server derived suggestions and emitted them over the event stream; the
+client discarded them. The feature was complete except for being visible.
+**Fixed:** chips render under the composer with an explanation of what
+triggered them.
+
+---
+
+## Controls with automated tests
+
+`npm test` — ____ / ____ passing at the commit under test.
+
+| Control | Positive test | Negative test |
+|---|---|---|
+| Identity policy | valid Google, verified email admitted | unverified email, wrong provider, empty uid rejected |
+| API ingress | — | missing / empty / malformed bearer rejected |
+| The Gate, inbound | ordinary text allowed | injection and harmful content blocked; HTTP error, malformed response, partial evaluation and network exception each block |
+| The Gate, outbound | clean reply allowed | sensitive data and malicious link blocked |
+| Companion role | ordinary job descriptions accepted | instruction-shaped roles rejected, length capped |
+| Watchtower | — | unset owner matches nobody; source contains no `users/` query |
+| Retention | three periods accepted | unknown values never shorten an entry's life |
+| Tool suggestions | clear intent suggests a tool | no user text ever reaches a URL |
+
+### F11 — A superseded Cloud Run service was left public and unauthenticated
+
+Discovered during Phase 6 red-team testing, not during development.
+
+The project contained a second Cloud Run service, `thoughtkeep`, created by an
+earlier AI Studio deployment and left running with `--allow-unauthenticated`.
+While the current service `thoughtkeep-app` correctly returned HTTP 401 on
+every protected route, the superseded service returned **HTTP 200** for
+several of them, because it was serving an older build predating the
+server-side authentication work.
+
+This is the finding this phase existed to surface. The application was secure;
+the *deployment surface* was not. An abandoned service is still a live service,
+and it carried the project's name.
+
+**Root cause.** Deployments were iterated by creating a new service rather than
+replacing the old one, and the retired service was never removed. Nothing in
+the build or test process could have caught this, because the defect was not in
+the code under test — it was in what else remained running beside it.
+
+**Fixed:** the superseded `thoughtkeep` service was deleted. Re-tested
+afterwards: the old URL no longer resolves, and `thoughtkeep-app` remains the
+only deployed service.
+
+**Lesson recorded.** Reviewing what is *deployed* is a separate exercise from
+reviewing what is *written*. A future check should enumerate every running
+service and confirm each one is intended.
