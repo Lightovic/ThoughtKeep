@@ -206,8 +206,8 @@ export const SecurityAuditModal: React.FC<SecurityAuditModalProps> = ({ isOpen, 
             <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
               Security Controls Audit
             </h3>
-            <div className="overflow-hidden rounded-xl border border-slate-200">
-              <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="min-w-[900px] w-full divide-y divide-slate-200 text-left text-xs">
                 <thead className="bg-slate-50 text-slate-700 font-semibold">
                   <tr>
                     <th scope="col" className="px-3.5 py-2.5">Directive</th>

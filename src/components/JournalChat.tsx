@@ -6,6 +6,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   Send,
+  PenLine,
   BookmarkCheck,
   RotateCcw,
   Sparkles,
@@ -24,6 +25,8 @@ interface JournalChatProps {
   userId: string;
   messages: ChatMessage[];
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
+  /** Opens the Security screen. Optional so the component still works without it. */
+  onShowSecurity?: () => void;
   inputText: string;
   setInputText: React.Dispatch<React.SetStateAction<string>>;
   preventAiProcessing: boolean;
@@ -33,9 +36,9 @@ interface JournalChatProps {
 }
 
 const STARTER_PROMPTS = [
-  'What was the most meaningful moment of your day?',
-  "What's been occupying your mind lately?",
-  'What went well today, and what would you like to carry forward?',
+  'The most meaningful moment of my day was\u2026',
+  "Something that\u2019s been occupying my mind lately is\u2026",
+  'Something that went well today was\u2026',
 ];
 
 function getSelectedRetention(): 'forever' | '7d' | '30d' | '365d' {
@@ -57,6 +60,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
   userId,
   messages,
   setMessages,
+  onShowSecurity,
   inputText,
   setInputText,
   preventAiProcessing,
@@ -692,12 +696,25 @@ export const JournalChat: React.FC<JournalChatProps> = ({
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
               This is your private space to reflect, untangle a problem, or capture impressions of
-              your day. Write freely. Gemini will listen and respond thoughtfully.
+              your day. Write freely — Gemini will listen and respond thoughtfully.
             </p>
+            <p className="mt-3 text-sm leading-relaxed text-slate-600">
+              Everything you write is screened before it reaches the AI and again before the reply
+              reaches you, and your entries are stored where nobody else can read them —{' '}
+              <span className="font-medium text-slate-800">not even ThoughtKeep&rsquo;s owner</span>.
+            </p>
+            <button
+              type="button"
+              onClick={onShowSecurity}
+              className="mt-3 inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-900"
+            >
+              See how your privacy is protected
+              <span aria-hidden="true">&rarr;</span>
+            </button>
 
             <div className="mt-8 text-left">
               <span className="text-xs font-semibold tracking-wider text-slate-400 uppercase">
-                Choose a reflection prompt to start
+                Start with one of these, or just write your own
               </span>
               <div className="mt-3 flex flex-col gap-2.5">
                 {STARTER_PROMPTS.map((prompt, idx) => (
@@ -709,7 +726,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
                     className="group flex items-center justify-between rounded-xl border border-slate-200 bg-white p-3.5 text-left text-sm text-slate-700 shadow-2xs transition-all hover:border-slate-400 hover:bg-slate-50/70"
                   >
                     <span>{prompt}</span>
-                    <Send className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-700" />
+                    <PenLine className="h-4 w-4 shrink-0 text-slate-400 transition-colors group-hover:text-slate-700" />
                   </button>
                 ))}
               </div>

@@ -226,6 +226,7 @@ export default function App() {
                 setPreventAiProcessing={setPreventAiProcessing}
                 activeEntryId={activeEntryId}
                 onEntrySaved={handleEntrySaved}
+                onShowSecurity={() => setActiveView('security')}
               />
             </div>
             {activeView === 'settings' && (

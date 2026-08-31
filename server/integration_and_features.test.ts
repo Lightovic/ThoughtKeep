@@ -85,11 +85,25 @@ describe('ThoughtKeep Security, Architecture, and UI Mechanics Verification', ()
     assert.ok(serverTs.includes('fetchCurrentWeather'));
   });
 
-  test('15. Landing page reflection starter prompts match requirements', () => {
+  test('15. Starter prompts are the user\'s own openers, not questions aimed at the assistant', () => {
+    // User testing found the original prompts were phrased as questions, so
+    // clicking one made the person ASK the journal "what went well today?".
+    // The assistant then correctly had to deflect a question about itself,
+    // which read as a bug. Prompts are now sentence-openers the user finishes.
     const chatTsx = fs.readFileSync(path.join(rootDir, 'src/components/JournalChat.tsx'), 'utf8');
-    assert.ok(chatTsx.includes('What was the most meaningful moment of your day?'));
-    assert.ok(chatTsx.includes("What's been occupying your mind lately?"));
-    assert.ok(chatTsx.includes('What went well today, and what would you like to carry forward?'));
+    const block = chatTsx.slice(
+      chatTsx.indexOf('const STARTER_PROMPTS'),
+      chatTsx.indexOf('];', chatTsx.indexOf('const STARTER_PROMPTS')),
+    );
+    assert.ok(block.includes('The most meaningful moment of my day was'));
+    assert.ok(block.includes('occupying my mind lately is'));
+    assert.ok(block.includes('Something that went well today was'));
+
+    // No starter may be phrased as a question, or the deflection returns.
+    assert.equal(block.includes('?'), false, 'starter prompts must not be questions');
+
+    // Clicking a starter must fill the composer, never send on the user's behalf.
+    assert.ok(chatTsx.includes('setInputText(prompt)'));
   });
 
   test('16. Weather coordinates are transient and NEVER stored in Firestore schema or writes', () => {
