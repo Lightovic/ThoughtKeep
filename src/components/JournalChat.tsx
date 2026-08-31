@@ -35,6 +35,22 @@ interface JournalChatProps {
   onEntrySaved: (entry: JournalEntry) => void;
 }
 
+/**
+ * An error whose message has already been written for a human to read.
+ *
+ * Messages reaching the user come only from the server, which curates them
+ * deliberately. Anything else - a browser network failure, a runtime type
+ * error, a parser exception - carries text written for a developer, and
+ * showing it is both confusing and an information leak. User testing surfaced
+ * this as a raw "Load failed" appearing on screen when the network dropped.
+ */
+class UserFacingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UserFacingError';
+  }
+}
+
 const STARTER_PROMPTS = [
   'The most meaningful moment of my day was\u2026',
   "Something that\u2019s been occupying my mind lately is\u2026",
@@ -379,7 +395,7 @@ export const JournalChat: React.FC<JournalChatProps> = ({
       }
 
       const reader = response.body?.getReader();
-      if (!reader) throw new Error('Response stream is unavailable. Please try again.');
+      if (!reader) throw new UserFacingError('Response stream is unavailable. Please try again.');
 
       const decoder = new TextDecoder();
       let accumulatedText = '';
@@ -429,11 +445,11 @@ export const JournalChat: React.FC<JournalChatProps> = ({
       }
 
       if (serverReportedError) {
-        throw new Error(serverReportedError);
+        throw new UserFacingError(serverReportedError);
       }
 
       if (!accumulatedText.trim()) {
-        throw new Error('The reflection assistant did not produce a response. Please try sending your thought again.');
+        throw new UserFacingError('The reflection assistant did not produce a response. Please try sending your thought again.');
       }
 
       const modelMessage: ChatMessage = {
@@ -446,10 +462,15 @@ export const JournalChat: React.FC<JournalChatProps> = ({
       setMessages((prev) => [...prev, modelMessage]);
     } catch (err: any) {
       let friendlyError = 'We could not complete this reflection turn. Please try again in a moment.';
-      if (err.name === 'AbortError') {
+      if (err?.name === 'AbortError') {
         friendlyError = 'The request took too long to respond. Please check your connection and try again.';
-      } else if (err.message && typeof err.message === 'string') {
+      } else if (err instanceof UserFacingError && typeof err.message === 'string' && err.message.trim()) {
+        // Written by the server for a person to read.
         friendlyError = err.message;
+      } else if (err instanceof TypeError) {
+        // Browser network failure - "Load failed" / "Failed to fetch".
+        // Never shown verbatim; it means nothing to the person using the app.
+        friendlyError = 'We could not reach ThoughtKeep just now. Please check your connection and try again \u2014 your conversation is still here.';
       }
       setErrorMessage(friendlyError);
     } finally {

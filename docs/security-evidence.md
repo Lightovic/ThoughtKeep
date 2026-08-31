@@ -521,3 +521,21 @@ only deployed service.
 **Lesson recorded.** Reviewing what is *deployed* is a separate exercise from
 reviewing what is *written*. A future check should enumerate every running
 service and confirm each one is intended.
+
+### F12 — Raw browser error surfaced to the user
+
+Discovered during Phase 7 human testing.
+
+**Initial result:** FAIL — when the network was interrupted during a reflection request, the browser/runtime error was surfaced directly to the user as `Load failed`.
+
+**Root cause:** The client-side error handler previously displayed `err.message` whenever it existed. Browser and runtime errors are written for developers rather than users, so this exposed implementation-level wording and produced a poor user experience.
+
+**Fix:** Introduced a `UserFacingError` type. Only deliberately curated server/user-facing messages are displayed verbatim. Browser network failures now use a controlled fallback message:
+
+`We could not reach ThoughtKeep just now. Please check your connection and try again — your conversation is still here.`
+
+**Regression protection:** Added automated test 18, which verifies that the old unguarded `err.message` pattern cannot return.
+
+**Retest:** With Wi-Fi disabled during a reflection request, ThoughtKeep displayed the curated connection message instead of `Load failed`. After connectivity was restored, normal messaging worked again.
+
+**Status:** FIXED

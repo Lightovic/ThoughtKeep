@@ -85,6 +85,32 @@ describe('ThoughtKeep Security, Architecture, and UI Mechanics Verification', ()
     assert.ok(serverTs.includes('fetchCurrentWeather'));
   });
 
+  test('18. No raw browser error message can reach the user', () => {
+    // Real-user testing on a dropped network showed a raw "Load failed"
+    // rendered on screen. Browser and runtime error text is written for
+    // developers; showing it is confusing and leaks internals. Only messages
+    // the server curated (UserFacingError) may be displayed verbatim.
+    const chatTsx = fs.readFileSync(path.join(rootDir, 'src/components/JournalChat.tsx'), 'utf8');
+
+    assert.ok(chatTsx.includes('class UserFacingError'), 'a curated-error type must exist');
+    assert.ok(
+      chatTsx.includes('err instanceof UserFacingError'),
+      'only curated errors may be shown to the user',
+    );
+
+    // The original defect: err.message shown whenever it merely EXISTS.
+    assert.equal(
+      chatTsx.includes("else if (err.message && typeof err.message === 'string')"),
+      false,
+      'err.message must never be shown just because it exists',
+    );
+
+    assert.ok(
+      chatTsx.includes('err instanceof TypeError'),
+      'network failures need their own plain-language message',
+    );
+  });
+
   test('15. Starter prompts are the user\'s own openers, not questions aimed at the assistant', () => {
     // User testing found the original prompts were phrased as questions, so
     // clicking one made the person ASK the journal "what went well today?".
