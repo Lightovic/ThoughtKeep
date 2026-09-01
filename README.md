@@ -22,24 +22,23 @@ Underneath, every message is screened in both directions before it reaches the m
 
 ```mermaid
 flowchart TD
-    U[Person writing or speaking] -->|Firebase ID token| A[Cloud Run · Express]
-    A --> V{"Verify token<br/>Admin SDK"}
-    V -->|invalid| X[401 · nothing proceeds]
-    V -->|verified UID| P{"Per-entry policy<br/>may AI read this?"}
-    P -->|never| X2[Excluded from all model context]
-    P -->|allowed| G1[THE GATE · inbound<br/>Model Armor · us-central1]
-    G1 -->|MATCH_FOUND or unreachable| B[Blocked · nothing sent or stored]
-    G1 -->|clean| GEM[Gemini · buffered in full]
-    GEM --> G2[THE GATE · outbound<br/>screened before ANY byte is emitted]
-    G2 -->|MATCH_FOUND or unreachable| B
-    G2 -->|clean| R[Reply streamed to the person]
-    A --> K[(THE KEEP · Firestore<br/>users/uid/entries<br/>owner-bound rules)]
-    A --> L[(THE LEDGER<br/>users/uid/securityEvents<br/>server-write only)]
-    A --> W[THE WATCHTOWER · owner only<br/>reads admin/metrics ONLY]
-    W -.->|no code path exists| K
-    S[(Secret Manager<br/>gemini-api-key)] -->|secretKeyRef at runtime| A
+    U["Person writing or speaking"] --> A["Cloud Run / Express"]
+    A --> V["Verify Firebase ID token with Admin SDK"]
+    V --> X["Invalid identity - 401"]
+    V --> P["Verified user identity"]
+    P --> X2["Entry marked never send to AI"]
+    P --> G["The Gate - inbound Model Armor"]
+    G --> B["Blocked - nothing sent or stored"]
+    G --> GEM["Gemini"]
+    GEM --> G2["The Gate - outbound screening"]
+    G2 --> B
+    G2 --> R["Reply to the person"]
+    A --> K["The Keep - Firestore - owner bound"]
+    A --> L["The Ledger - security events - server write only"]
+    A --> W["The Watchtower - owner metrics only"]
+    W -.-> K
+    S["Secret Manager - Gemini API key"] --> A
 ```
-
 **The request path.** The browser sends a Firebase ID token with every call. The server verifies it with the Admin SDK and derives the user's identity from the verified token alone — never from a body, header or query string. The entry's own privacy policy is checked next; an entry marked *never send to AI* is excluded before anything else happens. What remains passes through The Gate into Gemini, and the reply is buffered **in full** and screened again before a single byte reaches the browser.
 
 Note the dotted line: The Watchtower has **no code path** to user content. That absence is the control, and a test enforces it.
